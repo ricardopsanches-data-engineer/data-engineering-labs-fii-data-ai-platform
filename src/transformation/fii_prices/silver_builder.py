@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import re
 from datetime import datetime, timezone
@@ -40,6 +41,8 @@ SILVER_PRICES_BASE_DIR = (
     / "fii_daily_prices"
 )
 
+DEFAULT_DAYS = 5
+
 B3_FILENAME_PATTERN = re.compile(
     r"b3_download_(\d{4})(\d{2})(\d{2})\.zip$"
 )
@@ -47,10 +50,8 @@ B3_FILENAME_PATTERN = re.compile(
 
 def load_b3_parser():
     """
-    Carrega dinamicamente o parser B3 já existente.
-
-    Assim reutilizamos a ingestão que já foi
-    desenvolvida e validada anteriormente.
+    Carrega dinamicamente o parser B3
+    já existente no projeto.
     """
 
     spec = importlib.util.spec_from_file_location(
@@ -94,31 +95,46 @@ def extract_date_from_b3_filename(
             f"do arquivo: {path.name}"
         )
 
-    year = int(
-        match.group(1)
+    return (
+        int(match.group(1)),
+        int(match.group(2)),
+        int(match.group(3)),
     )
 
-    month = int(
-        match.group(2)
-    )
 
-    day = int(
-        match.group(3)
+def format_b3_date(
+    path: Path,
+) -> str:
+    """
+    Retorna a data do arquivo no formato YYYY-MM-DD.
+    """
+
+    year, month, day = (
+        extract_date_from_b3_filename(
+            path
+        )
     )
 
     return (
-        year,
-        month,
-        day,
+        f"{year:04d}-"
+        f"{month:02d}-"
+        f"{day:02d}"
     )
 
 
-def find_latest_b3_download(
+def find_latest_b3_downloads(
     base_directory: Path,
-) -> Path:
+    limit: int,
+) -> list[Path]:
     """
-    Localiza o pregão RAW mais recente.
+    Localiza os N arquivos RAW B3
+    mais recentes disponíveis.
     """
+
+    if limit <= 0:
+        raise ValueError(
+            "--days deve ser maior que zero."
+        )
 
     files = list(
         base_directory.rglob(
@@ -134,15 +150,11 @@ def find_latest_b3_download(
 
     files = sorted(
         files,
-        key=lambda path: (
-            extract_date_from_b3_filename(
-                path
-            )
-        ),
+        key=extract_date_from_b3_filename,
         reverse=True,
     )
 
-    return files[0]
+    return files[:limit]
 
 
 def load_fii_master(
@@ -204,26 +216,21 @@ def load_fii_master(
 
 def load_b3_dataframe(
     path: Path,
+    b3_parser,
 ) -> tuple[
     pd.DataFrame,
     dict[str, str],
 ]:
     """
-    Reutiliza parse_b3_download() para
-    transformar o ZIP RAW em DataFrame.
+    Reutiliza parse_b3_download()
+    para transformar o RAW B3
+    em DataFrame.
     """
-
-    print(
-        f"Carregando B3: "
-        f"{path}"
-    )
-
-    parser = load_b3_parser()
 
     (
         dataframe,
         metadata,
-    ) = parser.parse_b3_download(
+    ) = b3_parser.parse_b3_download(
         path
     )
 
@@ -273,8 +280,8 @@ def build_fii_daily_prices(
     master: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Mantém somente instrumentos B3 cujo ticker
-    corresponde ao candidato atual do FII Master.
+    Mantém somente instrumentos B3
+    presentes no FII Master.
     """
 
     active_master = master[
@@ -299,22 +306,28 @@ def build_fii_daily_prices(
         }
     )
 
-    if master_mapping[
-        "ticker"
-    ].duplicated().any():
+    duplicate_ticker_mask = (
+        master_mapping[
+            "ticker"
+        ].duplicated(
+            keep=False
+        )
+    )
 
-        duplicates = master_mapping[
+    if duplicate_ticker_mask.any():
+
+        duplicates = (
             master_mapping[
-                "ticker"
-            ].duplicated(
-                keep=False
+                duplicate_ticker_mask
+            ]
+            .sort_values(
+                by="ticker"
             )
-        ].sort_values(
-            by="ticker"
         )
 
         print(
-            "\nTickers duplicados no FII Master:"
+            "\nTickers duplicados "
+            "no FII Master:"
         )
 
         print(
@@ -343,7 +356,8 @@ def select_silver_columns(
     source_file_name: str,
 ) -> pd.DataFrame:
     """
-    Define o contrato da Silver de preços.
+    Define o contrato da Silver
+    de preços diários.
     """
 
     silver = dataframe[
@@ -381,270 +395,19 @@ def select_silver_columns(
     return silver
 
 
-def validate_fii_daily_prices(
-    dataframe: pd.DataFrame,
-) -> None:
-    """
-    Executa Data Quality antes da persistência.
-
-    Não corrige silenciosamente problemas:
-    qualquer violação crítica interrompe
-    a criação da Silver.
-    """
-
-    print(
-        "\n======================================"
-    )
-    print(
-        "Data Quality - FII Daily Prices"
-    )
-    print(
-        "======================================"
-    )
-
-    print(
-        f"Linhas: "
-        f"{len(dataframe):,}"
-    )
-
-    print(
-        f"Tickers únicos: "
-        f"{dataframe['ticker'].nunique():,}"
-    )
-
-    print(
-        f"CNPJs únicos: "
-        f"{dataframe['cnpj'].nunique():,}"
-    )
-
-    # -----------------------------------------
-    # Campos obrigatórios
-    # -----------------------------------------
-
-    null_ticker = dataframe[
-        "ticker"
-    ].isna().sum()
-
-    null_trade_date = dataframe[
-        "trade_date"
-    ].isna().sum()
-
-    null_cnpj = dataframe[
-        "cnpj"
-    ].isna().sum()
-
-    print(
-        f"Ticker nulo: "
-        f"{null_ticker:,}"
-    )
-
-    print(
-        f"Trade date nula: "
-        f"{null_trade_date:,}"
-    )
-
-    print(
-        f"CNPJ nulo: "
-        f"{null_cnpj:,}"
-    )
-
-    if (
-        null_ticker > 0
-        or null_trade_date > 0
-        or null_cnpj > 0
-    ):
-        raise ValueError(
-            "Campos obrigatórios nulos "
-            "encontrados."
-        )
-
-    # -----------------------------------------
-    # Duplicidade da granularidade
-    # -----------------------------------------
-
-    duplicate_mask = dataframe.duplicated(
-        subset=[
-            "trade_date",
-            "ticker",
-        ],
-        keep=False,
-    )
-
-    duplicate_count = (
-        duplicate_mask.sum()
-    )
-
-    print(
-        f"Duplicidades "
-        f"(trade_date + ticker): "
-        f"{duplicate_count:,}"
-    )
-
-    if duplicate_count > 0:
-
-        duplicates = dataframe[
-            duplicate_mask
-        ][
-            [
-                "trade_date",
-                "ticker",
-                "instrument_id",
-                "open_price",
-                "close_price",
-            ]
-        ].sort_values(
-            by=[
-                "trade_date",
-                "ticker",
-            ]
-        )
-
-        print(
-            "\nRegistros duplicados:"
-        )
-
-        print(
-            duplicates.to_string(
-                index=False
-            )
-        )
-
-        raise ValueError(
-            "Granularidade ticker + trade_date "
-            "não é única. Necessária investigação."
-        )
-
-    # -----------------------------------------
-    # Preços
-    # -----------------------------------------
-
-    price_columns = [
-        "open_price",
-        "low_price",
-        "high_price",
-        "average_price",
-        "close_price",
-    ]
-
-    invalid_price_mask = (
-        dataframe[
-            price_columns
-        ]
-        .le(0)
-        .any(
-            axis=1
-        )
-    )
-
-    invalid_price_count = (
-        invalid_price_mask.sum()
-    )
-
-    print(
-        f"Linhas com preço <= 0: "
-        f"{invalid_price_count:,}"
-    )
-
-    if invalid_price_count > 0:
-
-        print(
-            dataframe[
-                invalid_price_mask
-            ][
-                [
-                    "trade_date",
-                    "ticker",
-                    *price_columns,
-                ]
-            ].head(
-                20
-            ).to_string(
-                index=False
-            )
-        )
-
-        raise ValueError(
-            "Preços inválidos encontrados."
-        )
-
-    # -----------------------------------------
-    # Close dentro de low/high
-    # -----------------------------------------
-
-    invalid_range_mask = (
-        (
-            dataframe[
-                "close_price"
-            ]
-            < dataframe[
-                "low_price"
-            ]
-        )
-        |
-        (
-            dataframe[
-                "close_price"
-            ]
-            > dataframe[
-                "high_price"
-            ]
-        )
-    )
-
-    invalid_range_count = (
-        invalid_range_mask.sum()
-    )
-
-    print(
-        f"Close fora de low/high: "
-        f"{invalid_range_count:,}"
-    )
-
-    if invalid_range_count > 0:
-
-        print(
-            dataframe[
-                invalid_range_mask
-            ][
-                [
-                    "trade_date",
-                    "ticker",
-                    "low_price",
-                    "close_price",
-                    "high_price",
-                ]
-            ].head(
-                20
-            ).to_string(
-                index=False
-            )
-        )
-
-        raise ValueError(
-            "Close price fora do intervalo "
-            "low/high."
-        )
-
-    print(
-        "\nData Quality aprovada."
-    )
-
-
 def validate_trade_date_against_file(
     dataframe: pd.DataFrame,
     b3_path: Path,
 ) -> None:
     """
-    Confere se a data encontrada nos registros
-    corresponde à data do arquivo RAW.
+    Confere se trade_date corresponde
+    à data representada pelo arquivo RAW.
     """
 
-    (
-        year,
-        month,
-        day,
-    ) = extract_date_from_b3_filename(
-        b3_path
+    year, month, day = (
+        extract_date_from_b3_filename(
+            b3_path
+        )
     )
 
     expected_date = pd.Timestamp(
@@ -667,24 +430,13 @@ def validate_trade_date_against_file(
     if len(
         trade_dates
     ) != 1:
-
         raise ValueError(
-            "Mais de uma trade_date encontrada "
-            "na Silver."
+            "Mais de uma trade_date "
+            "encontrada na Silver."
         )
 
     actual_date = pd.Timestamp(
         trade_dates[0]
-    )
-
-    print(
-        f"Data arquivo B3: "
-        f"{expected_date.date()}"
-    )
-
-    print(
-        f"Trade date dataset: "
-        f"{actual_date.date()}"
     )
 
     if actual_date != expected_date:
@@ -694,21 +446,183 @@ def validate_trade_date_against_file(
         )
 
 
+def validate_fii_daily_prices(
+    dataframe: pd.DataFrame,
+) -> None:
+    """
+    Executa Data Quality antes
+    da persistência.
+    """
+
+    null_ticker = (
+        dataframe[
+            "ticker"
+        ]
+        .isna()
+        .sum()
+    )
+
+    null_trade_date = (
+        dataframe[
+            "trade_date"
+        ]
+        .isna()
+        .sum()
+    )
+
+    null_cnpj = (
+        dataframe[
+            "cnpj"
+        ]
+        .isna()
+        .sum()
+    )
+
+    if (
+        null_ticker > 0
+        or null_trade_date > 0
+        or null_cnpj > 0
+    ):
+        raise ValueError(
+            "Campos obrigatórios nulos."
+        )
+
+    duplicate_mask = dataframe.duplicated(
+        subset=[
+            "trade_date",
+            "ticker",
+        ],
+        keep=False,
+    )
+
+    if duplicate_mask.any():
+
+        duplicates = dataframe[
+            duplicate_mask
+        ][
+            [
+                "trade_date",
+                "ticker",
+                "instrument_id",
+                "open_price",
+                "close_price",
+            ]
+        ]
+
+        print(
+            "\nDuplicidades encontradas:"
+        )
+
+        print(
+            duplicates.to_string(
+                index=False
+            )
+        )
+
+        raise ValueError(
+            "Granularidade "
+            "trade_date + ticker "
+            "não é única."
+        )
+
+    price_columns = [
+        "open_price",
+        "low_price",
+        "high_price",
+        "average_price",
+        "close_price",
+    ]
+
+    invalid_price_mask = (
+        dataframe[
+            price_columns
+        ]
+        .le(0)
+        .any(
+            axis=1
+        )
+    )
+
+    if invalid_price_mask.any():
+
+        print(
+            dataframe[
+                invalid_price_mask
+            ][
+                [
+                    "trade_date",
+                    "ticker",
+                    *price_columns,
+                ]
+            ]
+            .head(20)
+            .to_string(
+                index=False
+            )
+        )
+
+        raise ValueError(
+            "Preços <= 0 encontrados."
+        )
+
+    invalid_range_mask = (
+        (
+            dataframe[
+                "close_price"
+            ]
+            < dataframe[
+                "low_price"
+            ]
+        )
+        |
+        (
+            dataframe[
+                "close_price"
+            ]
+            > dataframe[
+                "high_price"
+            ]
+        )
+    )
+
+    if invalid_range_mask.any():
+
+        print(
+            dataframe[
+                invalid_range_mask
+            ][
+                [
+                    "trade_date",
+                    "ticker",
+                    "low_price",
+                    "close_price",
+                    "high_price",
+                ]
+            ]
+            .head(20)
+            .to_string(
+                index=False
+            )
+        )
+
+        raise ValueError(
+            "Close price fora "
+            "do intervalo low/high."
+        )
+
+
 def build_destination_path(
     b3_path: Path,
 ) -> Path:
     """
-    Cria caminho Silver particionado:
-
-    year=YYYY/month=MM/day=DD/
+    Cria a partição Silver correspondente
+    ao pregão processado.
     """
 
-    (
-        year,
-        month,
-        day,
-    ) = extract_date_from_b3_filename(
-        b3_path
+    year, month, day = (
+        extract_date_from_b3_filename(
+            b3_path
+        )
     )
 
     return (
@@ -739,28 +653,201 @@ def save_silver(
     )
 
 
+def process_b3_file(
+    b3_path: Path,
+    master: pd.DataFrame,
+    b3_parser,
+) -> dict[str, object]:
+    """
+    Executa o fluxo completo para
+    um único pregão.
+    """
+
+    reference_date = format_b3_date(
+        b3_path
+    )
+
+    print(
+        "\n--------------------------------------"
+    )
+
+    print(
+        f"Processando pregão: "
+        f"{reference_date}"
+    )
+
+    print(
+        "--------------------------------------"
+    )
+
+    b3, metadata = load_b3_dataframe(
+        path=b3_path,
+        b3_parser=b3_parser,
+    )
+
+    print(
+        f"Registros B3: "
+        f"{len(b3):,}"
+    )
+
+    prices = build_fii_daily_prices(
+        b3=b3,
+        master=master,
+    )
+
+    print(
+        f"FIIs encontrados: "
+        f"{len(prices):,}"
+    )
+
+    silver = select_silver_columns(
+        dataframe=prices,
+        source_file_name=(
+            metadata[
+                "xml_file"
+            ]
+        ),
+    )
+
+    validate_trade_date_against_file(
+        dataframe=silver,
+        b3_path=b3_path,
+    )
+
+    validate_fii_daily_prices(
+        silver
+    )
+
+    destination = build_destination_path(
+        b3_path
+    )
+
+    save_silver(
+        dataframe=silver,
+        destination=destination,
+    )
+
+    print(
+        "Data Quality: OK"
+    )
+
+    print(
+        f"Silver salva em: "
+        f"{destination}"
+    )
+
+    return {
+        "trade_date": reference_date,
+        "raw_records": len(b3),
+        "fii_records": len(silver),
+        "fii_tickers": (
+            silver[
+                "ticker"
+            ].nunique()
+        ),
+        "destination": str(
+            destination
+        ),
+        "status": "SUCCESS",
+    }
+
+
+def print_execution_summary(
+    results: list[
+        dict[str, object]
+    ],
+) -> None:
+    """
+    Exibe resumo da execução em lote.
+    """
+
+    print(
+        "\n======================================"
+    )
+
+    print(
+        "Resumo da materialização Silver"
+    )
+
+    print(
+        "======================================"
+    )
+
+    for result in sorted(
+        results,
+        key=lambda item: str(
+            item[
+                "trade_date"
+            ]
+        ),
+    ):
+
+        print(
+            f"{result['trade_date']} | "
+            f"B3: {result['raw_records']:,} | "
+            f"FIIs: {result['fii_records']:,} | "
+            f"Tickers: {result['fii_tickers']:,} | "
+            f"{result['status']}"
+        )
+
+    print(
+        "\nPregões processados: "
+        f"{len(results):,}"
+    )
+
+
 def main() -> None:
+    cli_parser = argparse.ArgumentParser(
+        description=(
+            "Materializa a camada Silver "
+            "de preços dos FIIs para os "
+            "N pregões B3 mais recentes."
+        )
+    )
+
+    cli_parser.add_argument(
+        "--days",
+        type=int,
+        default=DEFAULT_DAYS,
+        help=(
+            "Quantidade de pregões RAW B3 "
+            "mais recentes a processar. "
+            f"Padrão: {DEFAULT_DAYS}."
+        ),
+    )
+
+    args = cli_parser.parse_args()
+
     print(
         "Construindo Silver "
         "de preços diários de FIIs..."
     )
 
-    # -----------------------------------------
-    # 1. Último pregão B3
-    # -----------------------------------------
+    print(
+        f"Quantidade solicitada: "
+        f"{args.days} pregões"
+    )
 
-    b3_path = find_latest_b3_download(
-        B3_RAW_DIR
+    b3_files = find_latest_b3_downloads(
+        base_directory=B3_RAW_DIR,
+        limit=args.days,
     )
 
     print(
-        f"\nÚltimo pregão encontrado: "
-        f"{b3_path.name}"
+        f"Arquivos RAW encontrados: "
+        f"{len(b3_files)}"
     )
 
-    # -----------------------------------------
-    # 2. FII Master
-    # -----------------------------------------
+    print(
+        "\nPregões selecionados:"
+    )
+
+    for path in reversed(
+        b3_files
+    ):
+        print(
+            f"  {format_b3_date(path)}"
+        )
 
     master = load_fii_master(
         FII_MASTER_PATH
@@ -773,7 +860,7 @@ def main() -> None:
     ]
 
     print(
-        f"FIIs no Master: "
+        f"\nFIIs no Master: "
         f"{len(master):,}"
     )
 
@@ -782,114 +869,39 @@ def main() -> None:
         f"{len(master_with_ticker):,}"
     )
 
-    # -----------------------------------------
-    # 3. B3
-    # -----------------------------------------
+    b3_parser = load_b3_parser()
 
-    (
-        b3,
-        metadata,
-    ) = load_b3_dataframe(
-        b3_path
+    results: list[
+        dict[str, object]
+    ] = []
+
+    # Ordenamos do pregão mais antigo
+    # para o mais recente apenas para
+    # facilitar leitura dos logs.
+    files_to_process = sorted(
+        b3_files,
+        key=extract_date_from_b3_filename,
+    )
+
+    for b3_path in files_to_process:
+
+        result = process_b3_file(
+            b3_path=b3_path,
+            master=master,
+            b3_parser=b3_parser,
+        )
+
+        results.append(
+            result
+        )
+
+    print_execution_summary(
+        results
     )
 
     print(
-        f"Registros B3: "
-        f"{len(b3):,}"
-    )
-
-    print(
-        f"Tickers únicos B3: "
-        f"{b3['ticker'].nunique():,}"
-    )
-
-    # -----------------------------------------
-    # 4. Join B3 x Master
-    # -----------------------------------------
-
-    prices = build_fii_daily_prices(
-        b3=b3,
-        master=master,
-    )
-
-    print(
-        "\nResultado B3 x FII Master:"
-    )
-
-    print(
-        f"Linhas encontradas: "
-        f"{len(prices):,}"
-    )
-
-    print(
-        f"Tickers FIIs encontrados: "
-        f"{prices['ticker'].nunique():,}"
-    )
-
-    # -----------------------------------------
-    # 5. Contrato Silver
-    # -----------------------------------------
-
-    silver = select_silver_columns(
-        dataframe=prices,
-        source_file_name=(
-            metadata[
-                "xml_file"
-            ]
-        ),
-    )
-
-    # -----------------------------------------
-    # 6. Data Quality
-    # -----------------------------------------
-
-    validate_trade_date_against_file(
-        dataframe=silver,
-        b3_path=b3_path,
-    )
-
-    validate_fii_daily_prices(
-        silver
-    )
-
-    # -----------------------------------------
-    # 7. Persistência
-    # -----------------------------------------
-
-    destination = build_destination_path(
-        b3_path
-    )
-
-    save_silver(
-        dataframe=silver,
-        destination=destination,
-    )
-
-    print(
-        "\n======================================"
-    )
-
-    print(
-        "Silver FII Daily Prices criada"
-    )
-
-    print(
-        "======================================"
-    )
-
-    print(
-        f"Arquivo: "
-        f"{destination}"
-    )
-
-    print(
-        f"Linhas: "
-        f"{len(silver):,}"
-    )
-
-    print(
-        f"Tickers: "
-        f"{silver['ticker'].nunique():,}"
+        "\nMaterialização Silver "
+        "concluída com sucesso."
     )
 
 
