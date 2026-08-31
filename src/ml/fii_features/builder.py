@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,13 +31,89 @@ ML_FEATURES_PATH = (
     / "fii_features.parquet"
 )
 
+DEFAULT_WINDOWS = [5, 10]
+
+FEATURE_VERSION = "v3"
+
+
+def normalize_windows(
+    windows: list[int],
+) -> list[int]:
+    """
+    Valida, remove duplicidades e ordena
+    as janelas temporais.
+    """
+
+    if not windows:
+        raise ValueError(
+            "Pelo menos uma janela temporal "
+            "deve ser informada."
+        )
+
+    if any(
+        window <= 0
+        for window in windows
+    ):
+        raise ValueError(
+            "Todas as janelas devem ser "
+            "maiores que zero."
+        )
+
+    return sorted(
+        set(windows)
+    )
+
+
+def build_window_feature_columns(
+    window: int,
+) -> list[str]:
+    """
+    Retorna as features obrigatórias
+    de uma determinada janela temporal.
+    """
+
+    return [
+        f"return_{window}d",
+        f"return_{window}d_pct",
+        f"ma_{window}",
+        f"volatility_{window}d",
+        f"volatility_{window}d_pct",
+        f"trades_avg_{window}d",
+        f"price_to_ma{window}",
+    ]
+
+
+def build_dynamic_feature_columns(
+    windows: list[int],
+) -> list[str]:
+    """
+    Constrói dinamicamente a lista
+    completa de features.
+    """
+
+    columns = [
+        "daily_return",
+        "daily_return_pct",
+    ]
+
+    for window in windows:
+        columns.extend(
+            build_window_feature_columns(
+                window
+            )
+        )
+
+    return columns
+
 
 def load_price_history(
     path: Path,
+    windows: list[int],
 ) -> pd.DataFrame:
     """
-    Carrega o histórico Gold Analytics,
-    fonte das features de ML.
+    Carrega o histórico Gold Analytics
+    e valida se as features solicitadas
+    existem.
     """
 
     if not path.exists():
@@ -53,24 +130,28 @@ def load_price_history(
         path
     )
 
-    required_columns = [
+    base_required_columns = [
         "trade_date",
         "ticker",
         "cnpj",
         "codigo_cvm",
         "close_price",
+        "trades_quantity",
         "daily_return",
         "daily_return_pct",
-        "return_5d",
-        "return_5d_pct",
-        "ma_5",
-        "volatility_5d",
-        "volatility_5d_pct",
-        "price_to_ma5",
-        "trades_quantity",
-        "trades_avg_5d",
         "observations_count",
     ]
+
+    dynamic_required_columns = (
+        build_dynamic_feature_columns(
+            windows
+        )
+    )
+
+    required_columns = (
+        base_required_columns
+        + dynamic_required_columns
+    )
 
     missing_columns = [
         column
@@ -81,7 +162,9 @@ def load_price_history(
     if missing_columns:
         raise ValueError(
             "Colunas obrigatórias ausentes "
-            f"no histórico: {missing_columns}"
+            f"no histórico: {missing_columns}. "
+            "Verifique se a Gold Analytics foi "
+            "gerada com as mesmas --windows."
         )
 
     dataframe[
@@ -97,33 +180,46 @@ def load_price_history(
 
 def build_ml_features(
     history: pd.DataFrame,
+    windows: list[int],
 ) -> pd.DataFrame:
     """
-    Constrói dataset de features ML v2.
+    Constrói dataset de features ML
+    dinamicamente.
 
-    Todas as features utilizam apenas
-    informações conhecidas até a feature_date.
+    Todas as features utilizam somente
+    informações disponíveis até a
+    feature_date.
     """
 
-    features = history[
-        [
-            "trade_date",
-            "ticker",
-            "cnpj",
-            "codigo_cvm",
-            "close_price",
-            "daily_return",
-            "daily_return_pct",
-            "return_5d",
-            "return_5d_pct",
-            "ma_5",
-            "volatility_5d",
-            "volatility_5d_pct",
-            "price_to_ma5",
-            "trades_quantity",
-            "trades_avg_5d",
-            "observations_count",
+    base_columns = [
+        "trade_date",
+        "ticker",
+        "cnpj",
+        "codigo_cvm",
+        "close_price",
+        "trades_quantity",
+        "daily_return",
+        "daily_return_pct",
+        "observations_count",
+    ]
+
+    dynamic_columns = (
+        build_dynamic_feature_columns(
+            windows
+        )
+    )
+
+    columns = (
+        base_columns
+        + [
+            column
+            for column in dynamic_columns
+            if column not in base_columns
         ]
+    )
+
+    features = history[
+        columns
     ].copy()
 
     features = features.rename(
@@ -133,65 +229,80 @@ def build_ml_features(
     )
 
     # -----------------------------------------
-    # Feature readiness v2
+    # Feature readiness dinâmica
     #
-    # return_5d e volatility_5d exigem
-    # pelo menos 6 preços históricos.
+    # Começamos assumindo True.
+    # Cada janela adiciona suas condições.
     # -----------------------------------------
 
-    features[
-        "feature_ready"
-    ] = (
-        (
-            features[
-                "observations_count"
-            ]
-            >= 6
-        )
-        &
+    ready_mask = pd.Series(
+        True,
+        index=features.index,
+        dtype=bool,
+    )
+
+    # Retorno diário também é obrigatório.
+    ready_mask &= (
         features[
             "daily_return"
         ].notna()
-        &
-        features[
-            "return_5d"
-        ].notna()
-        &
-        features[
-            "ma_5"
-        ].notna()
-        &
-        features[
-            "volatility_5d"
-        ].notna()
-        &
-        features[
-            "price_to_ma5"
-        ].notna()
-        &
-        features[
-            "trades_avg_5d"
-        ].notna()
     )
+
+    for window in windows:
+
+        minimum_observations = (
+            window + 1
+        )
+
+        ready_mask &= (
+            features[
+                "observations_count"
+            ]
+            >= minimum_observations
+        )
+
+        required_window_columns = [
+            f"return_{window}d",
+            f"ma_{window}",
+            f"volatility_{window}d",
+            f"trades_avg_{window}d",
+            f"price_to_ma{window}",
+        ]
+
+        for column in required_window_columns:
+            ready_mask &= (
+                features[
+                    column
+                ].notna()
+            )
+
+    features[
+        "feature_ready"
+    ] = ready_mask
 
     return features
 
 
 def validate_ml_features(
     dataframe: pd.DataFrame,
+    windows: list[int],
 ) -> None:
     """
-    Data Quality da Gold ML v2.
+    Data Quality dinâmica da Gold ML.
     """
 
     print(
         "\n======================================"
     )
     print(
-        "Data Quality - FII ML Features v2"
+        "Data Quality - FII ML Features"
     )
     print(
         "======================================"
+    )
+
+    print(
+        f"Janelas: {windows}"
     )
 
     print(
@@ -224,6 +335,10 @@ def validate_ml_features(
         f"Feature rows ainda imaturas: "
         f"{immature_count:,}"
     )
+
+    # -----------------------------------------
+    # Identidade
+    # -----------------------------------------
 
     required_identity_columns = [
         "feature_date",
@@ -259,6 +374,10 @@ def validate_ml_features(
             "de identidade nulos."
         )
 
+    # -----------------------------------------
+    # Granularidade
+    # -----------------------------------------
+
     duplicate_mask = dataframe.duplicated(
         subset=[
             "feature_date",
@@ -284,30 +403,8 @@ def validate_ml_features(
         )
 
     # -----------------------------------------
-    # Nenhuma linha com menos de 6
-    # observações pode estar pronta.
+    # Linhas prontas
     # -----------------------------------------
-
-    invalid_ready = dataframe[
-        (
-            dataframe[
-                "feature_ready"
-            ]
-        )
-        &
-        (
-            dataframe[
-                "observations_count"
-            ]
-            < 6
-        )
-    ]
-
-    if not invalid_ready.empty:
-        raise ValueError(
-            "feature_ready=True encontrado "
-            "com menos de 6 observações."
-        )
 
     ready = dataframe[
         dataframe[
@@ -315,55 +412,96 @@ def validate_ml_features(
         ]
     ]
 
-    ready_required_columns = [
+    if ready.empty:
+        print(
+            "\nAviso: nenhuma linha "
+            "feature_ready encontrada."
+        )
+
+        return
+
+    required_ready_columns = [
         "close_price",
-        "daily_return",
-        "return_5d",
-        "ma_5",
-        "volatility_5d",
-        "price_to_ma5",
         "trades_quantity",
-        "trades_avg_5d",
+        "daily_return",
     ]
 
-    if not ready.empty:
-        ready_nulls = (
-            ready[
-                ready_required_columns
+    for window in windows:
+        required_ready_columns.extend(
+            [
+                f"return_{window}d",
+                f"ma_{window}",
+                f"volatility_{window}d",
+                f"trades_avg_{window}d",
+                f"price_to_ma{window}",
             ]
-            .isna()
-            .sum()
         )
 
+    ready_nulls = (
+        ready[
+            required_ready_columns
+        ]
+        .isna()
+        .sum()
+    )
+
+    print(
+        "\nNulos em linhas feature_ready:"
+    )
+
+    for column, count in ready_nulls.items():
         print(
-            "\nNulos em linhas feature_ready:"
+            f"  {column}: "
+            f"{count:,}"
         )
 
-        for column, count in ready_nulls.items():
-            print(
-                f"  {column}: "
-                f"{count:,}"
-            )
+    if (
+        ready_nulls
+        > 0
+    ).any():
+        raise ValueError(
+            "Linhas feature_ready possuem "
+            "features obrigatórias nulas."
+        )
 
-        if (
-            ready_nulls
-            > 0
-        ).any():
+    # -----------------------------------------
+    # Validação estrutural por janela
+    # -----------------------------------------
+
+    for window in windows:
+
+        minimum_observations = (
+            window + 1
+        )
+
+        invalid_ready = ready[
+            ready[
+                "observations_count"
+            ]
+            < minimum_observations
+        ]
+
+        if not invalid_ready.empty:
             raise ValueError(
-                "Linhas feature_ready possuem "
-                "features obrigatórias nulas."
+                "feature_ready=True encontrado "
+                f"com menos de "
+                f"{minimum_observations} "
+                f"observações para a janela "
+                f"{window}."
             )
 
     print(
-        "\nData Quality ML v2 aprovada."
+        "\nData Quality ML aprovada."
     )
 
 
 def add_metadata(
     dataframe: pd.DataFrame,
+    windows: list[int],
 ) -> pd.DataFrame:
     """
-    Adiciona metadados técnicos.
+    Adiciona metadados técnicos
+    e de configuração.
     """
 
     result = dataframe.copy()
@@ -376,7 +514,14 @@ def add_metadata(
 
     result[
         "feature_version"
-    ] = "v2"
+    ] = FEATURE_VERSION
+
+    result[
+        "feature_windows"
+    ] = ",".join(
+        str(window)
+        for window in windows
+    )
 
     return result
 
@@ -402,9 +547,10 @@ def save_features(
 
 def print_summary(
     dataframe: pd.DataFrame,
+    windows: list[int],
 ) -> None:
     """
-    Resumo final.
+    Exibe resumo final.
     """
 
     ready = dataframe[
@@ -417,10 +563,20 @@ def print_summary(
         "\n======================================"
     )
     print(
-        "Resumo Gold ML - FII Features v2"
+        "Resumo Gold ML - FII Features"
     )
     print(
         "======================================"
+    )
+
+    print(
+        f"Feature version: "
+        f"{FEATURE_VERSION}"
+    )
+
+    print(
+        f"Janelas: "
+        f"{windows}"
     )
 
     print(
@@ -451,25 +607,71 @@ def print_summary(
         f"{ready['ticker'].nunique():,}"
     )
 
-    print(
-        f"Return 5d disponível: "
-        f"{dataframe['return_5d'].notna().sum():,}"
-    )
+    for window in windows:
 
-    print(
-        f"Volatilidade 5d disponível: "
-        f"{dataframe['volatility_5d'].notna().sum():,}"
-    )
+        return_column = (
+            f"return_{window}d"
+        )
+
+        volatility_column = (
+            f"volatility_{window}d"
+        )
+
+        print(
+            f"\nJanela {window}:"
+        )
+
+        print(
+            f"  {return_column} disponível: "
+            f"{dataframe[return_column].notna().sum():,}"
+        )
+
+        print(
+            f"  {volatility_column} disponível: "
+            f"{dataframe[volatility_column].notna().sum():,}"
+        )
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Constrói Gold ML "
+            "FII Features."
+        )
+    )
+
+    parser.add_argument(
+        "--windows",
+        nargs="+",
+        type=int,
+        default=DEFAULT_WINDOWS,
+        help=(
+            "Janelas temporais em pregões. "
+            "Devem ser iguais às utilizadas "
+            "na Gold Analytics. "
+            "Exemplo: --windows 5 10"
+        ),
+    )
+
+    args = parser.parse_args()
+
+    windows = normalize_windows(
+        args.windows
+    )
+
     print(
         "Construindo Gold ML "
-        "FII Features v2..."
+        "FII Features..."
+    )
+
+    print(
+        f"Janelas temporais: "
+        f"{windows}"
     )
 
     history = load_price_history(
-        PRICE_HISTORY_PATH
+        path=PRICE_HISTORY_PATH,
+        windows=windows,
     )
 
     print(
@@ -478,15 +680,18 @@ def main() -> None:
     )
 
     features = build_ml_features(
-        history
+        history=history,
+        windows=windows,
     )
 
     validate_ml_features(
-        features
+        dataframe=features,
+        windows=windows,
     )
 
     features = add_metadata(
-        features
+        dataframe=features,
+        windows=windows,
     )
 
     save_features(
@@ -495,7 +700,8 @@ def main() -> None:
     )
 
     print_summary(
-        features
+        dataframe=features,
+        windows=windows,
     )
 
     print(
@@ -508,7 +714,7 @@ def main() -> None:
 
     print(
         "\nGold ML "
-        "FII Features v2 criada "
+        "FII Features criada "
         "com sucesso."
     )
 

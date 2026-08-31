@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,16 +30,47 @@ GOLD_HISTORY_PATH = (
     / "fii_price_history.parquet"
 )
 
+DEFAULT_WINDOWS = [5, 10]
+
 PARTITION_PATTERN = re.compile(
     r"year=(\d{4}).*month=(\d{2}).*day=(\d{2})"
 )
+
+
+def normalize_windows(
+    windows: list[int],
+) -> list[int]:
+    """
+    Valida, remove duplicidades e ordena
+    as janelas temporais.
+    """
+
+    if not windows:
+        raise ValueError(
+            "Pelo menos uma janela temporal "
+            "deve ser informada."
+        )
+
+    if any(
+        window <= 0
+        for window in windows
+    ):
+        raise ValueError(
+            "Todas as janelas devem ser "
+            "maiores que zero."
+        )
+
+    return sorted(
+        set(windows)
+    )
 
 
 def extract_partition_date(
     path: Path,
 ) -> tuple[int, int, int]:
     """
-    Extrai YYYY/MM/DD do caminho particionado.
+    Extrai YYYY/MM/DD do caminho
+    particionado da Silver.
     """
 
     match = PARTITION_PATTERN.search(
@@ -63,7 +95,7 @@ def find_all_silver_price_files(
 ) -> list[Path]:
     """
     Localiza todas as partições Silver
-    de preços disponíveis.
+    disponíveis.
     """
 
     files = list(
@@ -89,7 +121,8 @@ def validate_source_schema(
     source_path: Path,
 ) -> None:
     """
-    Valida contrato mínimo das Silvers.
+    Valida o contrato mínimo de cada
+    partição Silver.
     """
 
     required_columns = [
@@ -125,7 +158,8 @@ def load_price_history(
     silver_files: list[Path],
 ) -> pd.DataFrame:
     """
-    Lê e concatena todas as partições Silver.
+    Carrega e consolida todas as
+    partições Silver.
     """
 
     dataframes: list[pd.DataFrame] = []
@@ -199,7 +233,8 @@ def validate_base_history(
     dataframe: pd.DataFrame,
 ) -> None:
     """
-    Valida histórico consolidado.
+    Data Quality do histórico antes
+    do cálculo das features.
     """
 
     print(
@@ -285,11 +320,11 @@ def validate_base_history(
         )
 
 
-def calculate_time_series_features(
+def calculate_daily_return(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Calcula features temporais por ticker.
+    Calcula retorno diário close-to-close.
     """
 
     result = dataframe.copy()
@@ -303,21 +338,17 @@ def calculate_time_series_features(
         drop=True
     )
 
-    grouped = result.groupby(
-        "ticker",
-        group_keys=False,
-    )
-
-    # -----------------------------------------
-    # Retorno diário close-to-close
-    # -----------------------------------------
-
     result[
         "daily_return"
-    ] = grouped[
-        "close_price"
-    ].pct_change(
-        fill_method=None
+    ] = (
+        result.groupby(
+            "ticker"
+        )[
+            "close_price"
+        ]
+        .pct_change(
+            fill_method=None
+        )
     )
 
     result[
@@ -329,124 +360,189 @@ def calculate_time_series_features(
         * 100
     )
 
-    # -----------------------------------------
-    # Retorno acumulado de 5 pregões
-    #
-    # close_t / close_t-5 - 1
-    #
-    # Precisa de 6 preços.
-    # -----------------------------------------
+    return result
 
-    result[
-        "return_5d"
-    ] = grouped[
-        "close_price"
-    ].pct_change(
-        periods=5,
-        fill_method=None,
-    )
 
-    result[
-        "return_5d_pct"
-    ] = (
+def calculate_window_features(
+    dataframe: pd.DataFrame,
+    windows: list[int],
+) -> pd.DataFrame:
+    """
+    Cria dinamicamente as features
+    temporais para cada janela.
+
+    Para window=5, por exemplo:
+
+    return_5d
+    return_5d_pct
+    ma_5
+    volatility_5d
+    volatility_5d_pct
+    trades_avg_5d
+    price_to_ma5
+    """
+
+    result = dataframe.copy()
+
+    for window in windows:
+
+        print(
+            f"Calculando janela "
+            f"{window} pregões..."
+        )
+
+        # -------------------------------------
+        # Retorno acumulado
+        #
+        # close_t / close_t-N - 1
+        # -------------------------------------
+
+        return_column = (
+            f"return_{window}d"
+        )
+
+        return_pct_column = (
+            f"return_{window}d_pct"
+        )
+
         result[
-            "return_5d"
-        ]
-        * 100
-    )
-
-    # -----------------------------------------
-    # Média móvel 5 pregões
-    # -----------------------------------------
-
-    result[
-        "ma_5"
-    ] = (
-        grouped[
-            "close_price"
-        ]
-        .rolling(
-            window=5,
-            min_periods=5,
+            return_column
+        ] = (
+            result.groupby(
+                "ticker"
+            )[
+                "close_price"
+            ]
+            .pct_change(
+                periods=window,
+                fill_method=None,
+            )
         )
-        .mean()
-        .reset_index(
-            level=0,
-            drop=True,
-        )
-    )
 
-    # -----------------------------------------
-    # Volatilidade 5 pregões
-    #
-    # 5 retornos diários dentro da janela.
-    # -----------------------------------------
-
-    result[
-        "volatility_5d"
-    ] = (
-        result.groupby(
-            "ticker"
-        )[
-            "daily_return"
-        ]
-        .rolling(
-            window=5,
-            min_periods=5,
-        )
-        .std()
-        .reset_index(
-            level=0,
-            drop=True,
-        )
-    )
-
-    result[
-        "volatility_5d_pct"
-    ] = (
         result[
-            "volatility_5d"
-        ]
-        * 100
-    )
-
-    # -----------------------------------------
-    # Liquidez proxy:
-    # média de quantidade de negócios
-    # em 5 pregões.
-    # -----------------------------------------
-
-    result[
-        "trades_avg_5d"
-    ] = (
-        grouped[
-            "trades_quantity"
-        ]
-        .rolling(
-            window=5,
-            min_periods=5,
+            return_pct_column
+        ] = (
+            result[
+                return_column
+            ]
+            * 100
         )
-        .mean()
-        .reset_index(
-            level=0,
-            drop=True,
+
+        # -------------------------------------
+        # Média móvel
+        # -------------------------------------
+
+        ma_column = (
+            f"ma_{window}"
         )
-    )
 
-    # -----------------------------------------
-    # Preço relativo à MA5
-    # -----------------------------------------
-
-    result[
-        "price_to_ma5"
-    ] = (
         result[
-            "close_price"
-        ]
-        / result[
-            "ma_5"
-        ]
-    )
+            ma_column
+        ] = (
+            result.groupby(
+                "ticker"
+            )[
+                "close_price"
+            ]
+            .rolling(
+                window=window,
+                min_periods=window,
+            )
+            .mean()
+            .reset_index(
+                level=0,
+                drop=True,
+            )
+        )
+
+        # -------------------------------------
+        # Volatilidade
+        #
+        # Desvio padrão dos últimos
+        # N retornos diários.
+        # -------------------------------------
+
+        volatility_column = (
+            f"volatility_{window}d"
+        )
+
+        volatility_pct_column = (
+            f"volatility_{window}d_pct"
+        )
+
+        result[
+            volatility_column
+        ] = (
+            result.groupby(
+                "ticker"
+            )[
+                "daily_return"
+            ]
+            .rolling(
+                window=window,
+                min_periods=window,
+            )
+            .std()
+            .reset_index(
+                level=0,
+                drop=True,
+            )
+        )
+
+        result[
+            volatility_pct_column
+        ] = (
+            result[
+                volatility_column
+            ]
+            * 100
+        )
+
+        # -------------------------------------
+        # Liquidez proxy
+        # -------------------------------------
+
+        trades_avg_column = (
+            f"trades_avg_{window}d"
+        )
+
+        result[
+            trades_avg_column
+        ] = (
+            result.groupby(
+                "ticker"
+            )[
+                "trades_quantity"
+            ]
+            .rolling(
+                window=window,
+                min_periods=window,
+            )
+            .mean()
+            .reset_index(
+                level=0,
+                drop=True,
+            )
+        )
+
+        # -------------------------------------
+        # Relação preço / média móvel
+        # -------------------------------------
+
+        price_to_ma_column = (
+            f"price_to_ma{window}"
+        )
+
+        result[
+            price_to_ma_column
+        ] = (
+            result[
+                "close_price"
+            ]
+            / result[
+                ma_column
+            ]
+        )
 
     return result
 
@@ -474,14 +570,44 @@ def calculate_observation_count(
     return result
 
 
-def select_gold_columns(
-    dataframe: pd.DataFrame,
-) -> pd.DataFrame:
+def build_dynamic_feature_columns(
+    windows: list[int],
+) -> list[str]:
     """
-    Contrato da Gold histórica.
+    Constrói dinamicamente o contrato
+    das features temporais.
     """
 
-    columns = [
+    columns: list[str] = [
+        "daily_return",
+        "daily_return_pct",
+    ]
+
+    for window in windows:
+        columns.extend(
+            [
+                f"return_{window}d",
+                f"return_{window}d_pct",
+                f"ma_{window}",
+                f"volatility_{window}d",
+                f"volatility_{window}d_pct",
+                f"trades_avg_{window}d",
+                f"price_to_ma{window}",
+            ]
+        )
+
+    return columns
+
+
+def select_gold_columns(
+    dataframe: pd.DataFrame,
+    windows: list[int],
+) -> pd.DataFrame:
+    """
+    Monta o contrato Gold dinamicamente.
+    """
+
+    identity_columns = [
         "trade_date",
         "ticker",
         "cnpj",
@@ -493,19 +619,25 @@ def select_gold_columns(
         "average_price",
         "close_price",
         "trades_quantity",
-        "daily_return",
-        "daily_return_pct",
-        "return_5d",
-        "return_5d_pct",
-        "ma_5",
-        "volatility_5d",
-        "volatility_5d_pct",
-        "trades_avg_5d",
-        "price_to_ma5",
+    ]
+
+    feature_columns = (
+        build_dynamic_feature_columns(
+            windows
+        )
+    )
+
+    metadata_columns = [
         "observations_count",
         "ticker_resolution_status",
         "market_evidence_confidence",
     ]
+
+    columns = (
+        identity_columns
+        + feature_columns
+        + metadata_columns
+    )
 
     gold = dataframe[
         columns
@@ -517,14 +649,22 @@ def select_gold_columns(
         timezone.utc
     )
 
+    gold[
+        "feature_windows"
+    ] = ",".join(
+        str(window)
+        for window in windows
+    )
+
     return gold
 
 
-def validate_calculated_history(
+def validate_dynamic_features(
     dataframe: pd.DataFrame,
+    windows: list[int],
 ) -> None:
     """
-    Valida disponibilidade das features.
+    Data Quality dinâmica das features.
     """
 
     print(
@@ -542,31 +682,18 @@ def validate_calculated_history(
         f"{len(dataframe):,}"
     )
 
-    feature_columns = [
-        "daily_return",
-        "return_5d",
-        "ma_5",
-        "volatility_5d",
-        "trades_avg_5d",
-    ]
+    daily_return_count = (
+        dataframe[
+            "daily_return"
+        ]
+        .notna()
+        .sum()
+    )
 
-    for column in feature_columns:
-        available = (
-            dataframe[
-                column
-            ]
-            .notna()
-            .sum()
-        )
-
-        print(
-            f"{column} disponível: "
-            f"{available:,}"
-        )
-
-    # -----------------------------------------
-    # Consistência estrutural
-    # -----------------------------------------
+    print(
+        f"daily_return disponível: "
+        f"{daily_return_count:,}"
+    )
 
     invalid_observation_count = (
         dataframe[
@@ -580,53 +707,176 @@ def validate_calculated_history(
             "observations_count inválido."
         )
 
-    # -----------------------------------------
-    # return_5d não pode existir antes da
-    # sexta observação.
-    # -----------------------------------------
+    for window in windows:
 
-    invalid_return_5d = dataframe[
-        (
+        print(
+            f"\nJanela {window}:"
+        )
+
+        return_column = (
+            f"return_{window}d"
+        )
+
+        ma_column = (
+            f"ma_{window}"
+        )
+
+        volatility_column = (
+            f"volatility_{window}d"
+        )
+
+        trades_avg_column = (
+            f"trades_avg_{window}d"
+        )
+
+        price_to_ma_column = (
+            f"price_to_ma{window}"
+        )
+
+        feature_columns = [
+            return_column,
+            ma_column,
+            volatility_column,
+            trades_avg_column,
+            price_to_ma_column,
+        ]
+
+        for column in feature_columns:
+
+            available = (
+                dataframe[
+                    column
+                ]
+                .notna()
+                .sum()
+            )
+
+            print(
+                f"  {column}: "
+                f"{available:,}"
+            )
+
+        # -------------------------------------
+        # MA e trades_avg precisam de
+        # N observações.
+        # -------------------------------------
+
+        invalid_ma = dataframe[
+            (
+                dataframe[
+                    "observations_count"
+                ]
+                < window
+            )
+            &
             dataframe[
-                "observations_count"
-            ]
-            < 6
-        )
-        &
-        dataframe[
-            "return_5d"
-        ].notna()
-    ]
+                ma_column
+            ].notna()
+        ]
 
-    if not invalid_return_5d.empty:
-        raise ValueError(
-            "return_5d encontrado antes "
-            "da sexta observação."
-        )
+        if not invalid_ma.empty:
+            raise ValueError(
+                f"{ma_column} encontrado "
+                f"antes de {window} observações."
+            )
 
-    # -----------------------------------------
-    # volatility_5d também exige cinco
-    # retornos, portanto pelo menos 6 preços.
-    # -----------------------------------------
-
-    invalid_volatility = dataframe[
-        (
+        invalid_trades_avg = dataframe[
+            (
+                dataframe[
+                    "observations_count"
+                ]
+                < window
+            )
+            &
             dataframe[
-                "observations_count"
-            ]
-            < 6
-        )
-        &
-        dataframe[
-            "volatility_5d"
-        ].notna()
-    ]
+                trades_avg_column
+            ].notna()
+        ]
 
-    if not invalid_volatility.empty:
-        raise ValueError(
-            "volatility_5d encontrada antes "
-            "da sexta observação."
+        if not invalid_trades_avg.empty:
+            raise ValueError(
+                f"{trades_avg_column} encontrado "
+                f"antes de {window} observações."
+            )
+
+        # -------------------------------------
+        # Return_Nd precisa comparar
+        # T com T-N.
+        #
+        # Portanto precisa de N+1 preços.
+        # -------------------------------------
+
+        minimum_return_observations = (
+            window + 1
         )
+
+        invalid_return = dataframe[
+            (
+                dataframe[
+                    "observations_count"
+                ]
+                < minimum_return_observations
+            )
+            &
+            dataframe[
+                return_column
+            ].notna()
+        ]
+
+        if not invalid_return.empty:
+            raise ValueError(
+                f"{return_column} encontrado "
+                f"antes de "
+                f"{minimum_return_observations} "
+                f"observações."
+            )
+
+        # -------------------------------------
+        # Volatilidade de N retornos também
+        # exige N+1 preços.
+        # -------------------------------------
+
+        invalid_volatility = dataframe[
+            (
+                dataframe[
+                    "observations_count"
+                ]
+                < minimum_return_observations
+            )
+            &
+            dataframe[
+                volatility_column
+            ].notna()
+        ]
+
+        if not invalid_volatility.empty:
+            raise ValueError(
+                f"{volatility_column} encontrada "
+                f"antes de "
+                f"{minimum_return_observations} "
+                f"observações."
+            )
+
+        # -------------------------------------
+        # price_to_maN não pode existir
+        # sem ma_N.
+        # -------------------------------------
+
+        invalid_price_to_ma = dataframe[
+            dataframe[
+                price_to_ma_column
+            ].notna()
+            &
+            dataframe[
+                ma_column
+            ].isna()
+        ]
+
+        if not invalid_price_to_ma.empty:
+            raise ValueError(
+                f"{price_to_ma_column} existe "
+                f"sem {ma_column}."
+            )
 
     print(
         "\nData Quality das features aprovada."
@@ -638,7 +888,7 @@ def save_gold(
     destination: Path,
 ) -> None:
     """
-    Persiste histórico Gold em Parquet.
+    Persiste a Gold Analytics em Parquet.
     """
 
     destination.parent.mkdir(
@@ -654,9 +904,10 @@ def save_gold(
 
 def print_history_summary(
     dataframe: pd.DataFrame,
+    windows: list[int],
 ) -> None:
     """
-    Resumo final.
+    Exibe resumo final.
     """
 
     min_date = (
@@ -682,6 +933,13 @@ def print_history_summary(
         .size()
     )
 
+    total_trading_days = (
+        dataframe[
+            "trade_date"
+        ]
+        .nunique()
+    )
+
     print(
         "\n======================================"
     )
@@ -699,7 +957,7 @@ def print_history_summary(
 
     print(
         f"Pregões: "
-        f"{dataframe['trade_date'].nunique():,}"
+        f"{total_trading_days:,}"
     )
 
     print(
@@ -720,24 +978,72 @@ def print_history_summary(
     print(
         f"Tickers presentes em todos "
         f"os pregões: "
-        f"{(observations == dataframe['trade_date'].nunique()).sum():,}"
+        f"{(observations == total_trading_days).sum():,}"
     )
 
     print(
-        f"Linhas com return_5d: "
-        f"{dataframe['return_5d'].notna().sum():,}"
+        f"Janelas calculadas: "
+        f"{windows}"
     )
 
-    print(
-        f"Linhas com volatility_5d: "
-        f"{dataframe['volatility_5d'].notna().sum():,}"
-    )
+    for window in windows:
+
+        return_column = (
+            f"return_{window}d"
+        )
+
+        volatility_column = (
+            f"volatility_{window}d"
+        )
+
+        print(
+            f"\nJanela {window}:"
+        )
+
+        print(
+            f"  Linhas com {return_column}: "
+            f"{dataframe[return_column].notna().sum():,}"
+        )
+
+        print(
+            f"  Linhas com {volatility_column}: "
+            f"{dataframe[volatility_column].notna().sum():,}"
+        )
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Constrói Gold Analytics "
+            "FII Price History."
+        )
+    )
+
+    parser.add_argument(
+        "--windows",
+        nargs="+",
+        type=int,
+        default=DEFAULT_WINDOWS,
+        help=(
+            "Janelas temporais em pregões. "
+            "Exemplo: --windows 5 10 20"
+        ),
+    )
+
+    args = parser.parse_args()
+
+    windows = normalize_windows(
+        args.windows
+    )
+
     print(
         "Construindo Gold Analytics "
         "FII Price History..."
+    )
+
+    print(
+        f"Janelas temporais: "
+        f"{windows}"
     )
 
     silver_files = (
@@ -759,24 +1065,27 @@ def main() -> None:
         history
     )
 
-    history = (
-        calculate_time_series_features(
-            history
-        )
-    )
-
-    history = (
-        calculate_observation_count(
-            history
-        )
-    )
-
-    gold = select_gold_columns(
+    history = calculate_daily_return(
         history
     )
 
-    validate_calculated_history(
-        gold
+    history = calculate_window_features(
+        dataframe=history,
+        windows=windows,
+    )
+
+    history = calculate_observation_count(
+        history
+    )
+
+    gold = select_gold_columns(
+        dataframe=history,
+        windows=windows,
+    )
+
+    validate_dynamic_features(
+        dataframe=gold,
+        windows=windows,
     )
 
     save_gold(
@@ -785,7 +1094,8 @@ def main() -> None:
     )
 
     print_history_summary(
-        gold
+        dataframe=gold,
+        windows=windows,
     )
 
     print(
