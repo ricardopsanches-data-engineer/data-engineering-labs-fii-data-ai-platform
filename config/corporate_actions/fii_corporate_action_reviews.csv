@@ -2,3 +2,4 @@ ticker,event_date,review_status,event_type,quantity_multiplier,price_adjustment_
 TEPP11,2025-11-28,CONFIRMED,SPLIT,10,0.1,,ClubeFII comunicado 1045778 / evidencias convergentes,2025-11-24,Desdobramento 1:10; data-base 27/11/2025; negociacao ajustada em 28/11/2025
 VVRI11,2026-07-16,CONFIRMED,SPLIT,10,0.1,,ClubeFII comunicado 1244312 / espelho de comunicado do fundo,2026-07-10,Desdobramento 1:10; data-base 15/07/2026; negociacao ajustada em 16/07/2026
 RDLI11,2026-07-09,CONFIRMED,AMORTIZATION,,,39.497077476,FNET documento 1242229,2026-07-08,Amortizacao parcial; data-base 08/07/2026; impacto de preco observado no pregao seguinte
+SJAU11,2026-03-24,CONFIRMED,REVERSE_SPLIT,0.1,10,,B3 Plantao de Noticias - Alteracoes para o pregao de 24/03/2026,2026-03-24,Grupamento 10:1 confirmado pela B3; cotas ex-grupamento a partir de 24/03/2026
