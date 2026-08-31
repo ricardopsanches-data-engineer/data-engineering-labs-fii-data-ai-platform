@@ -35,28 +35,54 @@ VALIDATION_PATH = (
 )
 
 
-OUTLIER_THRESHOLDS = [
+DIAGNOSTICS_VERSION = "v2"
+
+EXPECTED_SPLIT_VERSION = "v2"
+
+EXPECTED_TRAINING_DATASET_VERSION = "v3"
+
+EXPECTED_FEATURE_VERSION = "v6"
+
+EXPECTED_TARGET_HORIZON = 5
+
+EXPECTED_TARGET_HORIZON_SEMANTICS = (
+    "GLOBAL_B3_TRADING_DAYS"
+)
+
+EXPECTED_TARGET_RETURN_SEMANTICS = (
+    "COMPOUNDED_DAILY_RETURN_ECONOMIC"
+)
+
+EXPECTED_PRICE_SEMANTICS = (
+    "STRUCTURALLY_ADJUSTED_PRICE"
+)
+
+
+LOSS_THRESHOLDS = [
+    0.05,
+    0.10,
+    0.20,
+    0.30,
+    0.50,
+]
+
+GAIN_THRESHOLDS = [
+    0.05,
     0.10,
     0.20,
     0.30,
     0.50,
     1.00,
-    2.00,
-    5.00,
 ]
 
 
-COMMON_PRICE_FACTORS = [
-    0.05,
-    0.10,
-    0.20,
-    0.25,
-    0.50,
-    2.00,
-    4.00,
-    5.00,
-    10.00,
-    20.00,
+TOP_N_EXTREMES = [
+    1,
+    5,
+    10,
+    25,
+    50,
+    100,
 ]
 
 
@@ -64,22 +90,49 @@ def load_dataset(
     path: Path,
     split_name: str,
 ) -> pd.DataFrame:
+    """
+    Carrega um split temporal.
+    """
 
     if not path.exists():
         raise FileNotFoundError(
-            f"{split_name} não encontrado: {path}"
+            f"{split_name} não encontrado: "
+            f"{path}"
         )
 
     dataframe = pd.read_parquet(
         path
     )
 
-    dataframe[
-        "feature_date"
-    ] = pd.to_datetime(
+    required_date_columns = [
+        "feature_date",
+        "target_date",
+    ]
+
+    for column in required_date_columns:
+        if column not in dataframe.columns:
+            raise ValueError(
+                f"{split_name}: "
+                f"coluna {column} ausente."
+            )
+
         dataframe[
-            "feature_date"
+            column
+        ] = pd.to_datetime(
+            dataframe[
+                column
+            ]
+        )
+
+    dataframe[
+        "ticker"
+    ] = (
+        dataframe[
+            "ticker"
         ]
+        .astype("string")
+        .str.strip()
+        .str.upper()
     )
 
     print(
@@ -90,257 +143,851 @@ def load_dataset(
     return dataframe
 
 
-def discover_target_contract(
+def get_unique_string(
     dataframe: pd.DataFrame,
-) -> tuple[
-    str,
-    str,
-    str,
-]:
+    column: str,
+    split_name: str,
+) -> str:
+    """
+    Obtém exatamente um valor textual.
+    """
 
-    if "target_name" not in dataframe.columns:
+    if column not in dataframe.columns:
         raise ValueError(
-            "target_name não encontrada."
+            f"{split_name}: "
+            f"coluna {column} ausente."
         )
 
-    target_names = (
+    values = (
         dataframe[
-            "target_name"
+            column
         ]
         .dropna()
         .astype(str)
+        .str.strip()
         .unique()
+        .tolist()
     )
 
-    if len(target_names) != 1:
+    if len(values) != 1:
         raise ValueError(
-            "Esperado exatamente um target. "
-            f"Encontrados: {target_names.tolist()}"
+            f"{split_name}: "
+            f"{column} ambígua: "
+            f"{values}"
         )
 
-    target_column = (
-        target_names[0]
-    )
+    return values[0]
 
-    if "target_horizon" not in dataframe.columns:
+
+def get_unique_int(
+    dataframe: pd.DataFrame,
+    column: str,
+    split_name: str,
+) -> int:
+    """
+    Obtém exatamente um valor inteiro.
+    """
+
+    if column not in dataframe.columns:
         raise ValueError(
-            "target_horizon não encontrada."
+            f"{split_name}: "
+            f"coluna {column} ausente."
         )
 
-    horizons = (
+    values = (
         dataframe[
-            "target_horizon"
+            column
         ]
         .dropna()
         .astype(int)
         .unique()
+        .tolist()
     )
 
-    if len(horizons) != 1:
+    if len(values) != 1:
         raise ValueError(
-            "Esperado exatamente um horizonte. "
-            f"Encontrados: {horizons.tolist()}"
+            f"{split_name}: "
+            f"{column} ambígua: "
+            f"{values}"
         )
 
-    horizon = int(
-        horizons[0]
+    return int(
+        values[0]
     )
 
-    target_price_column = (
-        f"target_price_next_{horizon}d"
+
+def discover_target_column(
+    dataframe: pd.DataFrame,
+    split_name: str,
+) -> str:
+    """
+    Descobre o target oficial.
+    """
+
+    target_name = get_unique_string(
+        dataframe=dataframe,
+        column="target_name",
+        split_name=split_name,
     )
 
-    target_date_column = (
-        f"target_date_next_{horizon}d"
-    )
+    if target_name not in dataframe.columns:
+        raise ValueError(
+            f"{split_name}: "
+            f"target {target_name} "
+            "não existe."
+        )
+
+    return target_name
+
+
+def validate_split_contract(
+    dataframe: pd.DataFrame,
+    split_name: str,
+    target_column: str,
+) -> None:
+    """
+    Valida que o diagnóstico está
+    trabalhando sobre a arquitetura
+    econômica atual.
+    """
 
     required_columns = [
-        target_column,
-        target_price_column,
-        target_date_column,
-        "close_price",
-        "ticker",
         "feature_date",
+        "target_date",
+
+        "ticker",
+        "cnpj",
+        "codigo_cvm",
+
+        "close_price",
+        "close_price_raw",
+        "close_price_adjusted",
+
+        "target_price_next_5d",
+        "target_price_raw",
+        "target_price_return_next_5d",
+        "target_economic_vs_price_difference",
+
+        target_column,
+
+        "target_horizon",
+        "target_horizon_semantics",
+        "target_return_semantics",
+
+        "feature_ready",
+        "ml_eligible",
+
+        "split_name",
+        "split_version",
+
+        "training_dataset_version",
+        "source_feature_version",
+
+        "price_semantics",
+        "return_semantics",
     ]
 
-    missing = [
+    missing_columns = [
         column
         for column in required_columns
         if column not in dataframe.columns
     ]
 
-    if missing:
+    if missing_columns:
         raise ValueError(
-            "Colunas necessárias ausentes: "
-            f"{missing}"
+            f"{split_name}: "
+            "colunas obrigatórias ausentes: "
+            f"{missing_columns}"
         )
 
-    return (
-        target_column,
-        target_price_column,
-        target_date_column,
+    split_value = get_unique_string(
+        dataframe,
+        "split_name",
+        split_name,
     )
 
-
-def nearest_common_factor(
-    price_factor: float,
-) -> tuple[
-    float,
-    float,
-]:
-
-    nearest = min(
-        COMMON_PRICE_FACTORS,
-        key=lambda factor: abs(
-            price_factor
-            - factor
-        ),
+    split_version = get_unique_string(
+        dataframe,
+        "split_version",
+        split_name,
     )
 
-    relative_error = abs(
-        price_factor
-        - nearest
-    ) / nearest
-
-    return (
-        nearest,
-        relative_error,
+    training_version = get_unique_string(
+        dataframe,
+        "training_dataset_version",
+        split_name,
     )
 
+    feature_version = get_unique_string(
+        dataframe,
+        "source_feature_version",
+        split_name,
+    )
 
-def enrich_outliers(
-    dataframe: pd.DataFrame,
-    target_column: str,
-    target_price_column: str,
-) -> pd.DataFrame:
+    target_horizon = get_unique_int(
+        dataframe,
+        "target_horizon",
+        split_name,
+    )
 
-    enriched = dataframe.copy()
+    horizon_semantics = get_unique_string(
+        dataframe,
+        "target_horizon_semantics",
+        split_name,
+    )
 
-    enriched[
-        "price_factor"
-    ] = (
-        enriched[
-            target_price_column
+    target_semantics = get_unique_string(
+        dataframe,
+        "target_return_semantics",
+        split_name,
+    )
+
+    price_semantics = get_unique_string(
+        dataframe,
+        "price_semantics",
+        split_name,
+    )
+
+    return_semantics = get_unique_string(
+        dataframe,
+        "return_semantics",
+        split_name,
+    )
+
+    duplicate_count = int(
+        dataframe.duplicated(
+            subset=[
+                "feature_date",
+                "ticker",
+            ]
+        ).sum()
+    )
+
+    target_nulls = int(
+        dataframe[
+            target_column
         ]
-        / enriched[
-            "close_price"
-        ]
+        .isna()
+        .sum()
     )
 
-    nearest_values = []
-
-    relative_errors = []
-
-    for factor in enriched[
-        "price_factor"
-    ]:
+    target_non_finite = int(
         (
-            nearest,
-            relative_error,
-        ) = nearest_common_factor(
-            float(factor)
-        )
-
-        nearest_values.append(
-            nearest
-        )
-
-        relative_errors.append(
-            relative_error
-        )
-
-    enriched[
-        "nearest_common_factor"
-    ] = nearest_values
-
-    enriched[
-        "factor_relative_error"
-    ] = relative_errors
-
-    enriched[
-        "looks_like_common_factor"
-    ] = (
-        enriched[
-            "factor_relative_error"
-        ]
-        <= 0.10
+            dataframe[
+                target_column
+            ].notna()
+            &
+            ~np.isfinite(
+                dataframe[
+                    target_column
+                ]
+            )
+        ).sum()
     )
 
-    enriched[
-        "absolute_target"
-    ] = enriched[
-        target_column
-    ].abs()
+    invalid_dates = int(
+        (
+            dataframe[
+                "target_date"
+            ]
+            <= dataframe[
+                "feature_date"
+            ]
+        ).sum()
+    )
 
-    return enriched
+    feature_ready_false = int(
+        (
+            ~dataframe[
+                "feature_ready"
+            ]
+        ).sum()
+    )
+
+    ml_eligible_false = int(
+        (
+            ~dataframe[
+                "ml_eligible"
+            ]
+        ).sum()
+    )
+
+    print(
+        f"\nContrato {split_name}:"
+    )
+
+    print(
+        f"  split_version: "
+        f"{split_version}"
+    )
+
+    print(
+        f"  training_dataset_version: "
+        f"{training_version}"
+    )
+
+    print(
+        f"  source_feature_version: "
+        f"{feature_version}"
+    )
+
+    print(
+        f"  target_horizon: "
+        f"{target_horizon}"
+    )
+
+    print(
+        f"  target_return_semantics: "
+        f"{target_semantics}"
+    )
+
+    print(
+        f"  duplicidades: "
+        f"{duplicate_count:,}"
+    )
+
+    print(
+        f"  target nulo: "
+        f"{target_nulls:,}"
+    )
+
+    print(
+        f"  target não finito: "
+        f"{target_non_finite:,}"
+    )
+
+    print(
+        f"  target_date inválida: "
+        f"{invalid_dates:,}"
+    )
+
+    print(
+        f"  feature_ready=False: "
+        f"{feature_ready_false:,}"
+    )
+
+    print(
+        f"  ml_eligible=False: "
+        f"{ml_eligible_false:,}"
+    )
+
+    if split_value != split_name.lower():
+        raise ValueError(
+            f"{split_name}: "
+            f"split_name incompatível: "
+            f"{split_value}"
+        )
+
+    if split_version != EXPECTED_SPLIT_VERSION:
+        raise ValueError(
+            "Target Diagnostics v2 exige "
+            f"Temporal Split "
+            f"{EXPECTED_SPLIT_VERSION}."
+        )
+
+    if (
+        training_version
+        != EXPECTED_TRAINING_DATASET_VERSION
+    ):
+        raise ValueError(
+            "Target Diagnostics v2 exige "
+            f"Training Dataset "
+            f"{EXPECTED_TRAINING_DATASET_VERSION}."
+        )
+
+    if (
+        feature_version
+        != EXPECTED_FEATURE_VERSION
+    ):
+        raise ValueError(
+            "Target Diagnostics v2 exige "
+            f"Features "
+            f"{EXPECTED_FEATURE_VERSION}."
+        )
+
+    if (
+        target_horizon
+        != EXPECTED_TARGET_HORIZON
+    ):
+        raise ValueError(
+            "Target horizon incompatível."
+        )
+
+    if (
+        horizon_semantics
+        != EXPECTED_TARGET_HORIZON_SEMANTICS
+    ):
+        raise ValueError(
+            "Target horizon semantics "
+            "incompatível."
+        )
+
+    if (
+        target_semantics
+        != EXPECTED_TARGET_RETURN_SEMANTICS
+    ):
+        raise ValueError(
+            "Target econômico obrigatório."
+        )
+
+    if (
+        price_semantics
+        != EXPECTED_PRICE_SEMANTICS
+    ):
+        raise ValueError(
+            "Price semantics incompatível."
+        )
+
+    if (
+        return_semantics
+        != EXPECTED_TARGET_RETURN_SEMANTICS
+    ):
+        raise ValueError(
+            "Return semantics incompatível."
+        )
+
+    if duplicate_count > 0:
+        raise ValueError(
+            f"{split_name} possui duplicidades."
+        )
+
+    if target_nulls > 0:
+        raise ValueError(
+            f"{split_name} possui target nulo."
+        )
+
+    if target_non_finite > 0:
+        raise ValueError(
+            f"{split_name} possui target "
+            "não finito."
+        )
+
+    if invalid_dates > 0:
+        raise ValueError(
+            f"{split_name} possui "
+            "target_date inválida."
+        )
+
+    if feature_ready_false > 0:
+        raise ValueError(
+            f"{split_name} possui "
+            "feature_ready=False."
+        )
+
+    if ml_eligible_false > 0:
+        raise ValueError(
+            f"{split_name} possui "
+            "ml_eligible=False."
+        )
 
 
-def print_threshold_counts(
+def print_target_distribution(
     dataframe: pd.DataFrame,
     target_column: str,
     split_name: str,
 ) -> None:
+    """
+    Distribuição geral do target.
+    """
 
-    absolute_target = dataframe[
+    target = dataframe[
         target_column
-    ].abs()
+    ].astype(float)
+
+    quantiles = target.quantile(
+        [
+            0.01,
+            0.05,
+            0.10,
+            0.25,
+            0.50,
+            0.75,
+            0.90,
+            0.95,
+            0.99,
+        ]
+    )
 
     print(
         "\n======================================"
     )
-
     print(
-        f"Outliers por magnitude - {split_name}"
+        f"Distribuição do target - "
+        f"{split_name}"
     )
-
     print(
         "======================================"
     )
 
-    for threshold in OUTLIER_THRESHOLDS:
+    print(
+        f"Linhas: "
+        f"{len(target):,}"
+    )
 
+    print(
+        f"Média: "
+        f"{target.mean() * 100:.4f}%"
+    )
+
+    print(
+        f"Mediana: "
+        f"{target.median() * 100:.4f}%"
+    )
+
+    print(
+        f"Desvio padrão: "
+        f"{target.std() * 100:.4f}%"
+    )
+
+    print(
+        f"Mínimo: "
+        f"{target.min() * 100:.4f}%"
+    )
+
+    print(
+        f"Máximo: "
+        f"{target.max() * 100:.4f}%"
+    )
+
+    print(
+        "\nQuantis:"
+    )
+
+    for quantile, value in (
+        quantiles.items()
+    ):
+        print(
+            f"  q{int(quantile * 100):02d}: "
+            f"{value * 100:.4f}%"
+        )
+
+
+def print_directional_thresholds(
+    dataframe: pd.DataFrame,
+    target_column: str,
+    split_name: str,
+) -> None:
+    """
+    Conta perdas e ganhos extremos
+    separadamente.
+
+    Isso é melhor que usar somente
+    |target| porque preserva direção.
+    """
+
+    target = dataframe[
+        target_column
+    ].astype(float)
+
+    print(
+        "\n======================================"
+    )
+    print(
+        f"Perdas extremas - {split_name}"
+    )
+    print(
+        "======================================"
+    )
+
+    for threshold in LOSS_THRESHOLDS:
         count = int(
             (
-                absolute_target
+                target
+                <= -threshold
+            ).sum()
+        )
+
+        percentage = (
+            count
+            / len(target)
+            * 100
+        )
+
+        print(
+            f"target <= "
+            f"-{threshold * 100:>5.1f}%: "
+            f"{count:,} "
+            f"({percentage:.4f}%)"
+        )
+
+    print(
+        "\n======================================"
+    )
+    print(
+        f"Ganhos extremos - {split_name}"
+    )
+    print(
+        "======================================"
+    )
+
+    for threshold in GAIN_THRESHOLDS:
+        count = int(
+            (
+                target
                 >= threshold
             ).sum()
         )
 
         percentage = (
             count
-            / len(dataframe)
+            / len(target)
             * 100
         )
 
         print(
-            f"|target| >= "
-            f"{threshold * 100:>6.1f}%: "
+            f"target >= "
+            f"+{threshold * 100:>5.1f}%: "
             f"{count:,} "
             f"({percentage:.4f}%)"
         )
 
 
-def print_extreme_rows(
-    dataframe: pd.DataFrame,
-    target_column: str,
-    target_price_column: str,
-    target_date_column: str,
-    split_name: str,
-    limit: int = 30,
-) -> None:
+def calculate_trimmed_mean(
+    target: pd.Series,
+    remove_n: int,
+    direction: str,
+) -> float:
+    """
+    Remove os N retornos mais extremos
+    de uma direção e recalcula a média.
 
-    enriched = enrich_outliers(
-        dataframe=dataframe,
-        target_column=target_column,
-        target_price_column=(
-            target_price_column
-        ),
+    direction:
+        "negative"
+        "positive"
+        "absolute"
+    """
+
+    if remove_n <= 0:
+        return float(
+            target.mean()
+        )
+
+    if remove_n >= len(target):
+        return np.nan
+
+    if direction == "negative":
+        ordered = target.sort_values(
+            ascending=True
+        )
+
+    elif direction == "positive":
+        ordered = target.sort_values(
+            ascending=False
+        )
+
+    elif direction == "absolute":
+        ordered_index = (
+            target
+            .abs()
+            .sort_values(
+                ascending=False
+            )
+            .index
+        )
+
+        remaining = target.drop(
+            ordered_index[
+                :remove_n
+            ]
+        )
+
+        return float(
+            remaining.mean()
+        )
+
+    else:
+        raise ValueError(
+            f"Direção inválida: "
+            f"{direction}"
+        )
+
+    remaining = ordered.iloc[
+        remove_n:
+    ]
+
+    return float(
+        remaining.mean()
     )
 
-    extreme = (
-        enriched
+
+def print_mean_sensitivity(
+    dataframe: pd.DataFrame,
+    target_column: str,
+    split_name: str,
+) -> None:
+    """
+    Mede quanto a média depende de
+    poucos casos extremos.
+    """
+
+    target = dataframe[
+        target_column
+    ].astype(float)
+
+    original_mean = float(
+        target.mean()
+    )
+
+    print(
+        "\n======================================"
+    )
+    print(
+        f"Sensibilidade da média - "
+        f"{split_name}"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        f"Média original: "
+        f"{original_mean * 100:.4f}%"
+    )
+
+    for remove_n in TOP_N_EXTREMES:
+        if remove_n >= len(target):
+            continue
+
+        without_negative = (
+            calculate_trimmed_mean(
+                target=target,
+                remove_n=remove_n,
+                direction="negative",
+            )
+        )
+
+        without_positive = (
+            calculate_trimmed_mean(
+                target=target,
+                remove_n=remove_n,
+                direction="positive",
+            )
+        )
+
+        without_absolute = (
+            calculate_trimmed_mean(
+                target=target,
+                remove_n=remove_n,
+                direction="absolute",
+            )
+        )
+
+        print(
+            f"\nRemovendo TOP {remove_n}:"
+        )
+
+        print(
+            "  piores negativos: "
+            f"{without_negative * 100:.4f}%"
+        )
+
+        print(
+            "  maiores positivos: "
+            f"{without_positive * 100:.4f}%"
+        )
+
+        print(
+            "  maiores |retornos|: "
+            f"{without_absolute * 100:.4f}%"
+        )
+
+
+def print_worst_rows(
+    dataframe: pd.DataFrame,
+    target_column: str,
+    split_name: str,
+    limit: int = 20,
+) -> None:
+    """
+    Mostra as maiores perdas.
+    """
+
+    worst = (
+        dataframe
         .sort_values(
-            "absolute_target",
+            target_column,
+            ascending=True,
+        )
+        .head(
+            limit
+        )
+        .copy()
+    )
+
+    worst[
+        "target_pct"
+    ] = (
+        worst[
+            target_column
+        ]
+        * 100
+    )
+
+    worst[
+        "price_return_pct"
+    ] = (
+        worst[
+            "target_price_return_next_5d"
+        ]
+        * 100
+    )
+
+    worst[
+        "economic_price_diff_pp"
+    ] = (
+        worst[
+            "target_economic_vs_price_difference"
+        ]
+        * 100
+    )
+
+    display_columns = [
+        "ticker",
+        "feature_date",
+        "target_date",
+
+        "close_price",
+        "target_price_next_5d",
+
+        "target_pct",
+        "price_return_pct",
+        "economic_price_diff_pp",
+    ]
+
+    print(
+        "\n======================================"
+    )
+    print(
+        f"20 maiores perdas - "
+        f"{split_name}"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        worst[
+            display_columns
+        ].to_string(
+            index=False
+        )
+    )
+
+
+def print_best_rows(
+    dataframe: pd.DataFrame,
+    target_column: str,
+    split_name: str,
+    limit: int = 10,
+) -> None:
+    """
+    Mostra os maiores ganhos.
+    """
+
+    best = (
+        dataframe
+        .sort_values(
+            target_column,
             ascending=False,
         )
         .head(
@@ -349,23 +996,29 @@ def print_extreme_rows(
         .copy()
     )
 
-    extreme[
-        "close_price_display"
-    ] = extreme[
-        "close_price"
-    ]
-
-    extreme[
-        "target_price_display"
-    ] = extreme[
-        target_price_column
-    ]
-
-    extreme[
+    best[
         "target_pct"
     ] = (
-        extreme[
+        best[
             target_column
+        ]
+        * 100
+    )
+
+    best[
+        "price_return_pct"
+    ] = (
+        best[
+            "target_price_return_next_5d"
+        ]
+        * 100
+    )
+
+    best[
+        "economic_price_diff_pp"
+    ] = (
+        best[
+            "target_economic_vs_price_difference"
         ]
         * 100
     )
@@ -373,74 +1026,71 @@ def print_extreme_rows(
     print(
         "\n======================================"
     )
-
     print(
-        f"Targets mais extremos - {split_name}"
+        f"10 maiores ganhos - "
+        f"{split_name}"
     )
-
     print(
         "======================================"
     )
 
-    display_columns = [
-        "ticker",
-        "feature_date",
-        target_date_column,
-        "close_price_display",
-        "target_price_display",
-        "target_pct",
-        "price_factor",
-        "nearest_common_factor",
-        "factor_relative_error",
-        "looks_like_common_factor",
-    ]
-
     print(
-        extreme[
-            display_columns
+        best[
+            [
+                "ticker",
+                "feature_date",
+                "target_date",
+                "close_price",
+                "target_price_next_5d",
+                "target_pct",
+                "price_return_pct",
+                "economic_price_diff_pp",
+            ]
         ].to_string(
-            index=False,
+            index=False
         )
     )
 
 
-def print_extreme_tickers(
+def print_negative_concentration_by_ticker(
     dataframe: pd.DataFrame,
     target_column: str,
     split_name: str,
-    threshold: float = 0.50,
+    threshold: float = 0.10,
+    limit: int = 20,
 ) -> None:
+    """
+    Mede concentração das perdas relevantes
+    por ticker.
+    """
 
-    extreme = dataframe[
+    losses = dataframe[
         dataframe[
             target_column
-        ].abs()
-        >= threshold
+        ]
+        <= -threshold
     ].copy()
 
     print(
         "\n======================================"
     )
-
     print(
-        f"Tickers com |target| >= "
-        f"{threshold * 100:.0f}% - "
+        f"Concentração target <= "
+        f"-{threshold * 100:.0f}% - "
         f"{split_name}"
     )
-
     print(
         "======================================"
     )
 
-    if extreme.empty:
+    if losses.empty:
         print(
-            "Nenhum ticker encontrado."
+            "Nenhuma ocorrência."
         )
-
         return
 
     summary = (
-        extreme
+        losses
         .groupby(
             "ticker"
         )
@@ -449,13 +1099,13 @@ def print_extreme_tickers(
                 target_column,
                 "size",
             ),
+            mean_target=(
+                target_column,
+                "mean",
+            ),
             min_target=(
                 target_column,
                 "min",
-            ),
-            max_target=(
-                target_column,
-                "max",
             ),
             first_feature_date=(
                 "feature_date",
@@ -470,25 +1120,38 @@ def print_extreme_tickers(
     )
 
     summary[
-        "max_absolute_target"
-    ] = np.maximum(
+        "share_of_loss_events"
+    ] = (
         summary[
-            "min_target"
-        ].abs(),
-        summary[
-            "max_target"
-        ].abs(),
+            "occurrences"
+        ]
+        / len(losses)
     )
 
-    summary = summary.sort_values(
-        [
-            "max_absolute_target",
-            "occurrences",
-        ],
-        ascending=[
-            False,
-            False,
-        ],
+    summary = (
+        summary
+        .sort_values(
+            [
+                "occurrences",
+                "min_target",
+            ],
+            ascending=[
+                False,
+                True,
+            ],
+        )
+        .head(
+            limit
+        )
+    )
+
+    summary[
+        "mean_target_pct"
+    ] = (
+        summary[
+            "mean_target"
+        ]
+        * 100
     )
 
     summary[
@@ -501,12 +1164,26 @@ def print_extreme_tickers(
     )
 
     summary[
-        "max_target_pct"
+        "share_pct"
     ] = (
         summary[
-            "max_target"
+            "share_of_loss_events"
         ]
         * 100
+    )
+
+    print(
+        f"Total de eventos: "
+        f"{len(losses):,}"
+    )
+
+    print(
+        f"Tickers distintos: "
+        f"{losses['ticker'].nunique():,}"
+    )
+
+    print(
+        "\nTop tickers:"
     )
 
     print(
@@ -514,198 +1191,454 @@ def print_extreme_tickers(
             [
                 "ticker",
                 "occurrences",
+                "share_pct",
+                "mean_target_pct",
                 "min_target_pct",
-                "max_target_pct",
                 "first_feature_date",
                 "last_feature_date",
             ]
         ].to_string(
-            index=False,
+            index=False
         )
     )
 
 
-def print_common_factor_summary(
+def print_ticker_distribution_summary(
     dataframe: pd.DataFrame,
     target_column: str,
-    target_price_column: str,
     split_name: str,
-    threshold: float = 0.50,
 ) -> None:
+    """
+    Resume comportamento médio por FII.
+    """
 
-    extreme = dataframe[
-        dataframe[
-            target_column
-        ].abs()
-        >= threshold
-    ].copy()
+    ticker_summary = (
+        dataframe
+        .groupby(
+            "ticker"
+        )
+        .agg(
+            observations=(
+                target_column,
+                "size",
+            ),
+            mean_target=(
+                target_column,
+                "mean",
+            ),
+            median_target=(
+                target_column,
+                "median",
+            ),
+        )
+        .reset_index()
+    )
+
+    negative_mean_tickers = int(
+        (
+            ticker_summary[
+                "mean_target"
+            ]
+            < 0
+        ).sum()
+    )
+
+    positive_mean_tickers = int(
+        (
+            ticker_summary[
+                "mean_target"
+            ]
+            > 0
+        ).sum()
+    )
+
+    zero_mean_tickers = (
+        len(ticker_summary)
+        - negative_mean_tickers
+        - positive_mean_tickers
+    )
 
     print(
         "\n======================================"
     )
-
     print(
-        f"Possíveis fatores corporativos - "
+        f"Distribuição por ticker - "
         f"{split_name}"
     )
-
     print(
         "======================================"
     )
 
-    if extreme.empty:
-        print(
-            "Nenhum target extremo."
-        )
-
-        return
-
-    enriched = enrich_outliers(
-        dataframe=extreme,
-        target_column=target_column,
-        target_price_column=(
-            target_price_column
-        ),
+    print(
+        f"Tickers: "
+        f"{len(ticker_summary):,}"
     )
 
-    suspicious = enriched[
-        enriched[
-            "looks_like_common_factor"
-        ]
+    print(
+        "Tickers com target médio < 0: "
+        f"{negative_mean_tickers:,} "
+        f"("
+        f"{negative_mean_tickers / len(ticker_summary) * 100:.2f}%"
+        f")"
+    )
+
+    print(
+        "Tickers com target médio > 0: "
+        f"{positive_mean_tickers:,} "
+        f"("
+        f"{positive_mean_tickers / len(ticker_summary) * 100:.2f}%"
+        f")"
+    )
+
+    print(
+        "Tickers com target médio = 0: "
+        f"{zero_mean_tickers:,}"
+    )
+
+
+def build_split_summary(
+    dataframe: pd.DataFrame,
+    target_column: str,
+    split_name: str,
+) -> dict[str, object]:
+    """
+    Cria resumo usado na comparação
+    TRAIN x VALIDATION.
+    """
+
+    target = dataframe[
+        target_column
+    ].astype(float)
+
+    return {
+        "split": split_name,
+
+        "rows": len(dataframe),
+
+        "tickers": (
+            dataframe[
+                "ticker"
+            ].nunique()
+        ),
+
+        "mean": float(
+            target.mean()
+        ),
+
+        "median": float(
+            target.median()
+        ),
+
+        "std": float(
+            target.std()
+        ),
+
+        "positive_rate": float(
+            (
+                target
+                > 0
+            ).mean()
+        ),
+
+        "loss_5_rate": float(
+            (
+                target
+                <= -0.05
+            ).mean()
+        ),
+
+        "loss_10_rate": float(
+            (
+                target
+                <= -0.10
+            ).mean()
+        ),
+
+        "loss_20_rate": float(
+            (
+                target
+                <= -0.20
+            ).mean()
+        ),
+    }
+
+
+def print_train_validation_comparison(
+    train_summary: dict[str, object],
+    validation_summary: dict[str, object],
+) -> None:
+    """
+    Comparação direta entre os splits.
+    """
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Comparação TRAIN -> VALIDATION"
+    )
+    print(
+        "======================================"
+    )
+
+    metrics = [
+        (
+            "Média",
+            "mean",
+            True,
+        ),
+        (
+            "Mediana",
+            "median",
+            True,
+        ),
+        (
+            "Desvio padrão",
+            "std",
+            True,
+        ),
+        (
+            "Taxa positiva",
+            "positive_rate",
+            True,
+        ),
+        (
+            "Taxa <= -5%",
+            "loss_5_rate",
+            True,
+        ),
+        (
+            "Taxa <= -10%",
+            "loss_10_rate",
+            True,
+        ),
+        (
+            "Taxa <= -20%",
+            "loss_20_rate",
+            True,
+        ),
     ]
 
-    print(
-        f"Targets |retorno| >= "
-        f"{threshold * 100:.0f}%: "
-        f"{len(enriched):,}"
-    )
+    for (
+        label,
+        key,
+        percentage,
+    ) in metrics:
 
-    print(
-        "Próximos de fatores comuns "
-        "(tolerância 10%): "
-        f"{len(suspicious):,}"
-    )
-
-    if suspicious.empty:
-        return
-
-    factor_summary = (
-        suspicious[
-            "nearest_common_factor"
-        ]
-        .value_counts()
-        .sort_index()
-    )
-
-    print(
-        "\nDistribuição:"
-    )
-
-    for factor, count in (
-        factor_summary.items()
-    ):
-        print(
-            f"  fator ~{factor:g}x: "
-            f"{count:,}"
+        train_value = float(
+            train_summary[
+                key
+            ]
         )
+
+        validation_value = float(
+            validation_summary[
+                key
+            ]
+        )
+
+        delta = (
+            validation_value
+            - train_value
+        )
+
+        if percentage:
+            print(
+                f"{label}:"
+            )
+
+            print(
+                f"  TRAIN:      "
+                f"{train_value * 100:.4f}%"
+            )
+
+            print(
+                f"  VALIDATION: "
+                f"{validation_value * 100:.4f}%"
+            )
+
+            print(
+                f"  Delta:      "
+                f"{delta * 100:+.4f} p.p."
+            )
 
 
 def run_split_diagnostics(
     dataframe: pd.DataFrame,
     split_name: str,
-) -> None:
+) -> tuple[
+    str,
+    dict[str, object],
+]:
+    """
+    Executa todos os diagnósticos
+    de um split.
+    """
 
-    (
+    target_column = (
+        discover_target_column(
+            dataframe,
+            split_name,
+        )
+    )
+
+    validate_split_contract(
+        dataframe=dataframe,
+        split_name=split_name,
+        target_column=target_column,
+    )
+
+    print_target_distribution(
+        dataframe=dataframe,
+        target_column=target_column,
+        split_name=split_name,
+    )
+
+    print_directional_thresholds(
+        dataframe=dataframe,
+        target_column=target_column,
+        split_name=split_name,
+    )
+
+    print_mean_sensitivity(
+        dataframe=dataframe,
+        target_column=target_column,
+        split_name=split_name,
+    )
+
+    print_worst_rows(
+        dataframe=dataframe,
+        target_column=target_column,
+        split_name=split_name,
+    )
+
+    print_best_rows(
+        dataframe=dataframe,
+        target_column=target_column,
+        split_name=split_name,
+    )
+
+    print_negative_concentration_by_ticker(
+        dataframe=dataframe,
+        target_column=target_column,
+        split_name=split_name,
+        threshold=0.10,
+    )
+
+    print_negative_concentration_by_ticker(
+        dataframe=dataframe,
+        target_column=target_column,
+        split_name=split_name,
+        threshold=0.20,
+    )
+
+    print_ticker_distribution_summary(
+        dataframe=dataframe,
+        target_column=target_column,
+        split_name=split_name,
+    )
+
+    summary = build_split_summary(
+        dataframe=dataframe,
+        target_column=target_column,
+        split_name=split_name,
+    )
+
+    return (
         target_column,
-        target_price_column,
-        target_date_column,
-    ) = discover_target_contract(
-        dataframe
-    )
-
-    print_threshold_counts(
-        dataframe=dataframe,
-        target_column=target_column,
-        split_name=split_name,
-    )
-
-    print_extreme_rows(
-        dataframe=dataframe,
-        target_column=target_column,
-        target_price_column=(
-            target_price_column
-        ),
-        target_date_column=(
-            target_date_column
-        ),
-        split_name=split_name,
-    )
-
-    print_extreme_tickers(
-        dataframe=dataframe,
-        target_column=target_column,
-        split_name=split_name,
-    )
-
-    print_common_factor_summary(
-        dataframe=dataframe,
-        target_column=target_column,
-        target_price_column=(
-            target_price_column
-        ),
-        split_name=split_name,
+        summary,
     )
 
 
 def main() -> None:
+    print(
+        "Executando FII Target "
+        "Outlier Diagnostics..."
+    )
 
     print(
-        "Executando diagnóstico "
-        "de outliers do target..."
+        f"Diagnostics version: "
+        f"{DIAGNOSTICS_VERSION}"
+    )
+
+    print(
+        "Scope: TRAIN vs VALIDATION"
+    )
+
+    print(
+        "TEST não será carregado."
     )
 
     train = load_dataset(
         TRAIN_PATH,
-        "TRAIN",
+        "train",
     )
 
     validation = load_dataset(
         VALIDATION_PATH,
-        "VALIDATION",
+        "validation",
     )
 
-    run_split_diagnostics(
+    (
+        train_target,
+        train_summary,
+    ) = run_split_diagnostics(
         dataframe=train,
-        split_name="TRAIN",
+        split_name="train",
     )
 
-    run_split_diagnostics(
+    (
+        validation_target,
+        validation_summary,
+    ) = run_split_diagnostics(
         dataframe=validation,
-        split_name="VALIDATION",
+        split_name="validation",
+    )
+
+    if train_target != validation_target:
+        raise ValueError(
+            "TRAIN e VALIDATION possuem "
+            "targets diferentes."
+        )
+
+    print_train_validation_comparison(
+        train_summary=train_summary,
+        validation_summary=(
+            validation_summary
+        ),
     )
 
     print(
         "\n======================================"
     )
-
     print(
-        "Conclusão"
+        "Conclusão técnica"
     )
-
     print(
         "======================================"
     )
 
     print(
         "Este diagnóstico NÃO remove, "
-        "clipa ou altera nenhum dado."
+        "clipa ou altera targets."
     )
 
     print(
-        "Ele apenas identifica retornos "
-        "extremos e possíveis saltos de "
-        "preço compatíveis com eventos "
-        "corporativos."
+        "Ele mede se a distribuição da "
+        "VALIDATION é dominada por poucos "
+        "extremos ou por deterioração mais "
+        "ampla do universo."
+    )
+
+    print(
+        "Targets econômicos e retornos "
+        "de preço são mantidos separados "
+        "para auditoria."
+    )
+
+    print(
+        "O TEST permaneceu completamente "
+        "fora desta análise."
     )
 
     print(
