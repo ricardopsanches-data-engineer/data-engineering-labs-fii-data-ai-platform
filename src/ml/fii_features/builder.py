@@ -31,7 +31,7 @@ ML_FEATURES_PATH = (
     / "fii_features.parquet"
 )
 
-FEATURE_VERSION = "v4"
+FEATURE_VERSION = "v5"
 
 
 def normalize_windows(
@@ -69,9 +69,9 @@ def parse_feature_windows_value(
     salvo pela Gold Analytics.
 
     Exemplo:
-        "5,10"
+        "5,10,20"
         ->
-        [5, 10]
+        [5, 10, 20]
     """
 
     if value is None:
@@ -159,7 +159,8 @@ def build_window_feature_columns(
     window: int,
 ) -> list[str]:
     """
-    Features geradas para uma janela.
+    Retorna as features temporais
+    pertencentes a uma janela.
     """
 
     return [
@@ -178,7 +179,7 @@ def build_dynamic_feature_columns(
 ) -> list[str]:
     """
     Lista completa das features
-    temporais solicitadas.
+    temporais produzidas pela Analytics.
     """
 
     columns = [
@@ -191,6 +192,60 @@ def build_dynamic_feature_columns(
             build_window_feature_columns(
                 window
             )
+        )
+
+    return columns
+
+
+def build_cross_window_feature_columns(
+    windows: list[int],
+) -> list[str]:
+    """
+    Retorna os nomes das features
+    derivadas entre janelas consecutivas.
+
+    Exemplo:
+
+        windows = [5, 10, 20]
+
+    Relações criadas:
+
+        5 vs 10
+        10 vs 20
+    """
+
+    columns: list[str] = []
+
+    if len(windows) < 2:
+        return columns
+
+    for short_window, long_window in zip(
+        windows,
+        windows[1:],
+    ):
+        columns.extend(
+            [
+                (
+                    f"return_spread_"
+                    f"{short_window}d_"
+                    f"{long_window}d"
+                ),
+                (
+                    f"ma_ratio_"
+                    f"{short_window}_"
+                    f"{long_window}"
+                ),
+                (
+                    f"volatility_ratio_"
+                    f"{short_window}d_"
+                    f"{long_window}d"
+                ),
+                (
+                    f"trades_ratio_"
+                    f"{short_window}d_"
+                    f"{long_window}d"
+                ),
+            ]
         )
 
     return columns
@@ -217,6 +272,12 @@ def load_price_history(
         path
     )
 
+    if "trade_date" not in dataframe.columns:
+        raise ValueError(
+            "A Gold Analytics não possui "
+            "a coluna trade_date."
+        )
+
     dataframe[
         "trade_date"
     ] = pd.to_datetime(
@@ -228,13 +289,74 @@ def load_price_history(
     return dataframe
 
 
+def resolve_windows(
+    dataframe: pd.DataFrame,
+    override_windows: list[int] | None,
+) -> list[int]:
+    """
+    Resolve as janelas utilizadas pelo ML.
+
+    Prioridade:
+
+    1. --windows explícito
+    2. feature_windows da Gold Analytics
+    """
+
+    discovered_windows = (
+        discover_windows_from_history(
+            dataframe
+        )
+    )
+
+    if override_windows is None:
+        print(
+            "Janelas herdadas da "
+            f"Gold Analytics: "
+            f"{discovered_windows}"
+        )
+
+        return discovered_windows
+
+    override_windows = normalize_windows(
+        override_windows
+    )
+
+    print(
+        f"Janelas da Gold Analytics: "
+        f"{discovered_windows}"
+    )
+
+    print(
+        f"Override solicitado: "
+        f"{override_windows}"
+    )
+
+    unavailable_windows = [
+        window
+        for window in override_windows
+        if window not in discovered_windows
+    ]
+
+    if unavailable_windows:
+        raise ValueError(
+            "Override solicita janelas "
+            "não disponíveis na "
+            "Gold Analytics: "
+            f"{unavailable_windows}. "
+            f"Disponíveis: "
+            f"{discovered_windows}"
+        )
+
+    return override_windows
+
+
 def validate_history_contract(
     dataframe: pd.DataFrame,
     windows: list[int],
 ) -> None:
     """
-    Valida se a Gold Analytics contém
-    todas as colunas necessárias.
+    Valida o contrato da Gold Analytics
+    necessário para produzir a Gold ML.
     """
 
     base_required_columns = [
@@ -272,77 +394,172 @@ def validate_history_contract(
     if missing_columns:
         raise ValueError(
             "Colunas obrigatórias ausentes "
-            f"na Gold Analytics: "
+            "na Gold Analytics: "
             f"{missing_columns}"
         )
 
 
-def resolve_windows(
+def calculate_cross_window_features(
     dataframe: pd.DataFrame,
-    override_windows: list[int] | None,
-) -> list[int]:
+    windows: list[int],
+) -> pd.DataFrame:
     """
-    Resolve janelas.
+    Calcula features relacionais entre
+    janelas consecutivas.
 
-    Prioridade:
-    1. --windows explícito
-    2. feature_windows da Gold Analytics
+    Todas utilizam somente informações
+    conhecidas até a feature_date.
+
+    Exemplos para [5, 10, 20]:
+
+        return_spread_5d_10d
+        ma_ratio_5_10
+        volatility_ratio_5d_10d
+        trades_ratio_5d_10d
+
+        return_spread_10d_20d
+        ma_ratio_10_20
+        volatility_ratio_10d_20d
+        trades_ratio_10d_20d
     """
 
-    discovered_windows = (
-        discover_windows_from_history(
-            dataframe
-        )
-    )
+    result = dataframe.copy()
 
-    if override_windows is None:
-        print(
-            "Janelas herdadas da "
-            f"Gold Analytics: "
-            f"{discovered_windows}"
-        )
+    if len(windows) < 2:
+        return result
 
-        return discovered_windows
+    for short_window, long_window in zip(
+        windows,
+        windows[1:],
+    ):
+        # -------------------------------------
+        # Momentum relativo
+        #
+        # retorno curto - retorno longo
+        # -------------------------------------
 
-    override_windows = (
-        normalize_windows(
-            override_windows
-        )
-    )
-
-    print(
-        f"Janelas da Gold Analytics: "
-        f"{discovered_windows}"
-    )
-
-    print(
-        f"Override solicitado: "
-        f"{override_windows}"
-    )
-
-    # -----------------------------------------
-    # O override só pode usar janelas
-    # realmente disponíveis no histórico.
-    # -----------------------------------------
-
-    unavailable_windows = [
-        window
-        for window in override_windows
-        if window
-        not in discovered_windows
-    ]
-
-    if unavailable_windows:
-        raise ValueError(
-            "Override solicita janelas "
-            "não disponíveis na "
-            "Gold Analytics: "
-            f"{unavailable_windows}. "
-            f"Disponíveis: "
-            f"{discovered_windows}"
+        return_spread_column = (
+            f"return_spread_"
+            f"{short_window}d_"
+            f"{long_window}d"
         )
 
-    return override_windows
+        result[
+            return_spread_column
+        ] = (
+            result[
+                f"return_{short_window}d"
+            ]
+            - result[
+                f"return_{long_window}d"
+            ]
+        )
+
+        # -------------------------------------
+        # Relação entre médias móveis
+        #
+        # > 1:
+        # média curta acima da longa
+        #
+        # < 1:
+        # média curta abaixo da longa
+        # -------------------------------------
+
+        ma_ratio_column = (
+            f"ma_ratio_"
+            f"{short_window}_"
+            f"{long_window}"
+        )
+
+        long_ma = result[
+            f"ma_{long_window}"
+        ].where(
+            result[
+                f"ma_{long_window}"
+            ]
+            != 0
+        )
+
+        result[
+            ma_ratio_column
+        ] = (
+            result[
+                f"ma_{short_window}"
+            ]
+            / long_ma
+        )
+
+        # -------------------------------------
+        # Regime relativo de volatilidade
+        #
+        # > 1:
+        # volatilidade recente maior
+        #
+        # < 1:
+        # volatilidade recente menor
+        #
+        # Quando a volatilidade longa é zero,
+        # a razão não é matematicamente
+        # definida e permanece nula.
+        # -------------------------------------
+
+        volatility_ratio_column = (
+            f"volatility_ratio_"
+            f"{short_window}d_"
+            f"{long_window}d"
+        )
+
+        long_volatility = result[
+            f"volatility_{long_window}d"
+        ].where(
+            result[
+                f"volatility_{long_window}d"
+            ]
+            != 0
+        )
+
+        result[
+            volatility_ratio_column
+        ] = (
+            result[
+                f"volatility_{short_window}d"
+            ]
+            / long_volatility
+        )
+
+        # -------------------------------------
+        # Regime relativo de atividade
+        #
+        # > 1:
+        # atividade recente acima da média
+        # de prazo mais longo
+        # -------------------------------------
+
+        trades_ratio_column = (
+            f"trades_ratio_"
+            f"{short_window}d_"
+            f"{long_window}d"
+        )
+
+        long_trades = result[
+            f"trades_avg_{long_window}d"
+        ].where(
+            result[
+                f"trades_avg_{long_window}d"
+            ]
+            != 0
+        )
+
+        result[
+            trades_ratio_column
+        ] = (
+            result[
+                f"trades_avg_{short_window}d"
+            ]
+            / long_trades
+        )
+
+    return result
 
 
 def build_ml_features(
@@ -350,7 +567,7 @@ def build_ml_features(
     windows: list[int],
 ) -> pd.DataFrame:
     """
-    Constrói dataset ML dinamicamente.
+    Constrói o dataset ML dinamicamente.
     """
 
     base_columns = [
@@ -388,13 +605,36 @@ def build_ml_features(
         }
     )
 
+    # -----------------------------------------
+    # Features derivadas entre janelas
+    # -----------------------------------------
+
+    features = (
+        calculate_cross_window_features(
+            dataframe=features,
+            windows=windows,
+        )
+    )
+
+    # -----------------------------------------
+    # Feature readiness
+    #
+    # Uma linha é considerada madura quando
+    # todas as features temporais necessárias
+    # às janelas solicitadas estão disponíveis.
+    #
+    # Features de razão derivadas não entram
+    # obrigatoriamente no readiness porque
+    # algumas razões podem ser matematicamente
+    # indefinidas quando o denominador é zero.
+    # -----------------------------------------
+
     ready_mask = pd.Series(
         True,
         index=features.index,
         dtype=bool,
     )
 
-    # Retorno diário obrigatório.
     ready_mask &= (
         features[
             "daily_return"
@@ -402,7 +642,6 @@ def build_ml_features(
     )
 
     for window in windows:
-
         minimum_observations = (
             window + 1
         )
@@ -489,6 +728,10 @@ def validate_ml_features(
         f"{immature_count:,}"
     )
 
+    # -----------------------------------------
+    # Identidade
+    # -----------------------------------------
+
     required_identity_columns = [
         "feature_date",
         "ticker",
@@ -523,6 +766,10 @@ def validate_ml_features(
             "de identidade nulos."
         )
 
+    # -----------------------------------------
+    # Granularidade
+    # -----------------------------------------
+
     duplicate_mask = dataframe.duplicated(
         subset=[
             "feature_date",
@@ -546,6 +793,10 @@ def validate_ml_features(
             "Dataset ML contém duplicidade "
             "na granularidade de features."
         )
+
+    # -----------------------------------------
+    # Linhas feature_ready
+    # -----------------------------------------
 
     ready = dataframe[
         dataframe[
@@ -587,7 +838,8 @@ def validate_ml_features(
     )
 
     print(
-        "\nNulos em linhas feature_ready:"
+        "\nNulos obrigatórios em "
+        "linhas feature_ready:"
     )
 
     for column, count in ready_nulls.items():
@@ -605,8 +857,11 @@ def validate_ml_features(
             "features obrigatórias nulas."
         )
 
-    for window in windows:
+    # -----------------------------------------
+    # Validação estrutural por janela
+    # -----------------------------------------
 
+    for window in windows:
         minimum_observations = (
             window + 1
         )
@@ -625,6 +880,84 @@ def validate_ml_features(
                 f"{minimum_observations} "
                 f"observações para a janela "
                 f"{window}."
+            )
+
+    # -----------------------------------------
+    # Features derivadas entre janelas
+    #
+    # Spread e MA ratio devem estar
+    # disponíveis nas linhas maduras.
+    #
+    # Volatility ratio e trades ratio podem
+    # ficar nulos se houver denominador zero.
+    # Por isso são monitoradas, mas não
+    # invalidam automaticamente o dataset.
+    # -----------------------------------------
+
+    cross_columns = (
+        build_cross_window_feature_columns(
+            windows
+        )
+    )
+
+    if cross_columns:
+        print(
+            "\nFeatures derivadas "
+            "entre janelas:"
+        )
+
+        for column in cross_columns:
+            available = (
+                ready[
+                    column
+                ]
+                .notna()
+                .sum()
+            )
+
+            missing = (
+                ready[
+                    column
+                ]
+                .isna()
+                .sum()
+            )
+
+            print(
+                f"  {column}: "
+                f"{available:,} disponíveis | "
+                f"{missing:,} nulas"
+            )
+
+        mandatory_cross_columns = [
+            column
+            for column in cross_columns
+            if (
+                column.startswith(
+                    "return_spread_"
+                )
+                or column.startswith(
+                    "ma_ratio_"
+                )
+            )
+        ]
+
+        mandatory_cross_nulls = (
+            ready[
+                mandatory_cross_columns
+            ]
+            .isna()
+            .sum()
+        )
+
+        if (
+            mandatory_cross_nulls
+            > 0
+        ).any():
+            raise ValueError(
+                "Features derivadas obrigatórias "
+                "possuem valores nulos em "
+                "linhas feature_ready."
             )
 
     print(
@@ -667,7 +1000,7 @@ def save_features(
     destination: Path,
 ) -> None:
     """
-    Persiste Gold ML.
+    Persiste a Gold ML em Parquet.
     """
 
     destination.parent.mkdir(
@@ -686,7 +1019,7 @@ def print_summary(
     windows: list[int],
 ) -> None:
     """
-    Resumo final.
+    Exibe resumo final.
     """
 
     ready = dataframe[
@@ -744,7 +1077,6 @@ def print_summary(
     )
 
     for window in windows:
-
         return_column = (
             f"return_{window}d"
         )
@@ -766,6 +1098,23 @@ def print_summary(
             f"  {volatility_column} disponível: "
             f"{dataframe[volatility_column].notna().sum():,}"
         )
+
+    cross_columns = (
+        build_cross_window_feature_columns(
+            windows
+        )
+    )
+
+    if cross_columns:
+        print(
+            "\nFeatures entre janelas:"
+        )
+
+        for column in cross_columns:
+            print(
+                f"  {column}: "
+                f"{dataframe[column].notna().sum():,}"
+            )
 
 
 def main() -> None:
@@ -850,8 +1199,8 @@ def main() -> None:
 
     print(
         "\nGold ML "
-        "FII Features criada "
-        "com sucesso."
+        f"FII Features {FEATURE_VERSION} "
+        "criada com sucesso."
     )
 
 
