@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import argparse
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-SILVER_PRICES_BASE_DIR = (
+
+ADJUSTED_PRICES_PATH = (
     PROJECT_ROOT
     / "data"
-    / "silver"
-    / "fii_daily_prices"
+    / "gold"
+    / "analytics"
+    / "fii_corporate_action_adjusted_prices"
+    / "fii_corporate_action_adjusted_prices.parquet"
 )
 
 GOLD_HISTORY_DIR = (
@@ -30,11 +33,20 @@ GOLD_HISTORY_PATH = (
     / "fii_price_history.parquet"
 )
 
-DEFAULT_WINDOWS = [5, 10]
 
-PARTITION_PATTERN = re.compile(
-    r"year=(\d{4}).*month=(\d{2}).*day=(\d{2})"
+PRICE_HISTORY_VERSION = "v2"
+
+PRICE_HISTORY_SOURCE = (
+    "FII_CORPORATE_ACTION_ADJUSTED_PRICES"
 )
+
+EXPECTED_ADJUSTED_PRICES_VERSION = "v2"
+
+DEFAULT_WINDOWS = [
+    5,
+    10,
+    20,
+]
 
 
 def normalize_windows(
@@ -65,160 +77,42 @@ def normalize_windows(
     )
 
 
-def extract_partition_date(
-    path: Path,
-) -> tuple[int, int, int]:
+def load_adjusted_prices() -> pd.DataFrame:
     """
-    Extrai YYYY/MM/DD do caminho
-    particionado da Silver.
-    """
+    Carrega a camada governada de preços
+    ajustados.
 
-    match = PARTITION_PATTERN.search(
-        str(path.parent)
-    )
-
-    if match is None:
-        raise ValueError(
-            "Não foi possível identificar "
-            f"a data da partição: {path}"
-        )
-
-    return (
-        int(match.group(1)),
-        int(match.group(2)),
-        int(match.group(3)),
-    )
-
-
-def find_all_silver_price_files(
-    base_directory: Path,
-) -> list[Path]:
-    """
-    Localiza todas as partições Silver
-    disponíveis.
+    Esta é a fonte oficial do Price History v2.
     """
 
-    files = list(
-        base_directory.rglob(
-            "fii_daily_prices.parquet"
-        )
-    )
-
-    if not files:
+    if not ADJUSTED_PRICES_PATH.exists():
         raise FileNotFoundError(
-            "Nenhuma Silver de preços encontrada "
-            f"em {base_directory}"
+            "FII Corporate Action Adjusted "
+            "Prices não encontrado: "
+            f"{ADJUSTED_PRICES_PATH}"
         )
-
-    return sorted(
-        files,
-        key=extract_partition_date,
-    )
-
-
-def validate_source_schema(
-    dataframe: pd.DataFrame,
-    source_path: Path,
-) -> None:
-    """
-    Valida o contrato mínimo de cada
-    partição Silver.
-    """
-
-    required_columns = [
-        "trade_date",
-        "ticker",
-        "cnpj",
-        "codigo_cvm",
-        "instrument_id",
-        "open_price",
-        "low_price",
-        "high_price",
-        "average_price",
-        "close_price",
-        "trades_quantity",
-        "ticker_resolution_status",
-        "market_evidence_confidence",
-    ]
-
-    missing_columns = [
-        column
-        for column in required_columns
-        if column not in dataframe.columns
-    ]
-
-    if missing_columns:
-        raise ValueError(
-            f"Arquivo {source_path} possui "
-            f"colunas ausentes: {missing_columns}"
-        )
-
-
-def load_price_history(
-    silver_files: list[Path],
-) -> pd.DataFrame:
-    """
-    Carrega e consolida todas as
-    partições Silver.
-    """
-
-    dataframes: list[pd.DataFrame] = []
 
     print(
-        "\n======================================"
-    )
-    print(
-        "Carregando partições Silver"
-    )
-    print(
-        "======================================"
+        "Carregando FII Corporate Action "
+        "Adjusted Prices..."
     )
 
-    for index, path in enumerate(
-        silver_files,
-        start=1,
-    ):
-        year, month, day = (
-            extract_partition_date(
-                path
-            )
-        )
-
-        print(
-            f"[{index}/{len(silver_files)}] "
-            f"{year:04d}-{month:02d}-{day:02d}"
-        )
-
-        dataframe = pd.read_parquet(
-            path
-        )
-
-        validate_source_schema(
-            dataframe=dataframe,
-            source_path=path,
-        )
-
-        dataframes.append(
-            dataframe
-        )
-
-    history = pd.concat(
-        dataframes,
-        ignore_index=True,
+    dataframe = pd.read_parquet(
+        ADJUSTED_PRICES_PATH
     )
 
-    history[
+    dataframe[
         "trade_date"
     ] = pd.to_datetime(
-        history[
+        dataframe[
             "trade_date"
         ]
     )
 
-    history[
+    dataframe[
         "ticker"
     ] = (
-        history[
+        dataframe[
             "ticker"
         ]
         .astype("string")
@@ -226,22 +120,238 @@ def load_price_history(
         .str.upper()
     )
 
-    return history
+    return dataframe
 
 
-def validate_base_history(
+def validate_source(
     dataframe: pd.DataFrame,
 ) -> None:
     """
-    Data Quality do histórico antes
-    do cálculo das features.
+    Valida o contrato de entrada.
+
+    A fonte deve ser necessariamente
+    Adjusted Prices v2.
+
+    Os três retornos diários possuem
+    NULL estrutural esperado somente
+    na primeira observação de cada ticker.
     """
+
+    strictly_required_columns = [
+        "trade_date",
+        "ticker",
+        "cnpj",
+        "codigo_cvm",
+        "instrument_id",
+
+        "open_price_raw",
+        "low_price_raw",
+        "high_price_raw",
+        "average_price_raw",
+        "close_price_raw",
+
+        "open_price_adjusted",
+        "low_price_adjusted",
+        "high_price_adjusted",
+        "average_price_adjusted",
+        "close_price_adjusted",
+
+        "trades_quantity",
+
+        "cash_flow_per_unit_raw",
+        "cash_flow_per_unit_adjusted",
+
+        "review_status_on_date",
+        "event_type_on_date",
+        "confirmed_action_on_date",
+        "pending_review_on_date",
+
+        "ticker_resolution_status",
+        "market_evidence_confidence",
+
+        "adjusted_prices_version",
+        "adjusted_prices_source",
+    ]
+
+    structural_nullable_columns = [
+        "daily_return_raw",
+        "daily_return_adjusted_price",
+        "daily_return_economic",
+    ]
+
+    required_schema_columns = (
+        strictly_required_columns
+        + structural_nullable_columns
+    )
+
+    missing_columns = [
+        column
+        for column in required_schema_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "Adjusted Prices possui "
+            "colunas ausentes: "
+            f"{missing_columns}"
+        )
+
+    duplicate_count = int(
+        dataframe.duplicated(
+            subset=[
+                "ticker",
+                "trade_date",
+            ]
+        ).sum()
+    )
+
+    strictly_required_null_count = int(
+        dataframe[
+            strictly_required_columns
+        ]
+        .isna()
+        .sum()
+        .sum()
+    )
+
+    ordered = dataframe.sort_values(
+        [
+            "ticker",
+            "trade_date",
+        ]
+    ).copy()
+
+    first_observation_mask = (
+        ordered
+        .groupby(
+            "ticker",
+            sort=False,
+        )
+        .cumcount()
+        == 0
+    )
+
+    expected_first_observations = int(
+        first_observation_mask.sum()
+    )
+
+    structural_null_counts = {
+        column: int(
+            ordered[
+                column
+            ]
+            .isna()
+            .sum()
+        )
+        for column in structural_nullable_columns
+    }
+
+    unexpected_structural_null_counts = {}
+
+    unexpected_structural_non_null_counts = {}
+
+    for column in structural_nullable_columns:
+
+        unexpected_nulls = int(
+            (
+                ~first_observation_mask
+                &
+                ordered[
+                    column
+                ].isna()
+            ).sum()
+        )
+
+        unexpected_non_nulls = int(
+            (
+                first_observation_mask
+                &
+                ordered[
+                    column
+                ].notna()
+            ).sum()
+        )
+
+        unexpected_structural_null_counts[
+            column
+        ] = unexpected_nulls
+
+        unexpected_structural_non_null_counts[
+            column
+        ] = unexpected_non_nulls
+
+    invalid_raw_prices = int(
+        (
+            dataframe[
+                "close_price_raw"
+            ]
+            <= 0
+        ).sum()
+    )
+
+    invalid_adjusted_prices = int(
+        (
+            dataframe[
+                "close_price_adjusted"
+            ]
+            <= 0
+        ).sum()
+    )
+
+    non_finite_economic_returns = int(
+        (
+            dataframe[
+                "daily_return_economic"
+            ].notna()
+            &
+            ~np.isfinite(
+                dataframe[
+                    "daily_return_economic"
+                ]
+            )
+        ).sum()
+    )
+
+    invalid_versions = sorted(
+        set(
+            dataframe[
+                "adjusted_prices_version"
+            ]
+            .dropna()
+            .astype(str)
+            .tolist()
+        )
+        - {
+            EXPECTED_ADJUSTED_PRICES_VERSION,
+        }
+    )
+
+    invalid_sources = sorted(
+        set(
+            dataframe[
+                "adjusted_prices_source"
+            ]
+            .dropna()
+            .astype(str)
+            .tolist()
+        )
+        - {
+            "SILVER_FII_DAILY_PRICES",
+        }
+    )
+
+    pending_count = int(
+        dataframe[
+            "pending_review_on_date"
+        ].sum()
+    )
 
     print(
         "\n======================================"
     )
     print(
-        "Data Quality - Histórico Base"
+        "Data Quality - Adjusted Source"
     )
     print(
         "======================================"
@@ -253,78 +363,187 @@ def validate_base_history(
     )
 
     print(
-        f"Tickers únicos: "
+        f"Tickers: "
         f"{dataframe['ticker'].nunique():,}"
     )
 
     print(
-        f"Pregões únicos: "
+        f"Pregões: "
         f"{dataframe['trade_date'].nunique():,}"
     )
 
-    duplicate_mask = dataframe.duplicated(
-        subset=[
-            "ticker",
-            "trade_date",
-        ],
-        keep=False,
-    )
-
-    duplicate_count = int(
-        duplicate_mask.sum()
+    print(
+        f"Duplicidades: "
+        f"{duplicate_count:,}"
     )
 
     print(
-        f"Duplicidades ticker + trade_date: "
-        f"{duplicate_count:,}"
+        "Nulos obrigatórios reais: "
+        f"{strictly_required_null_count:,}"
+    )
+
+    print(
+        "\nNULLs estruturais esperados:"
+    )
+
+    print(
+        "  Primeiras observações: "
+        f"{expected_first_observations:,}"
+    )
+
+    for column in structural_nullable_columns:
+        print(
+            f"  {column}: "
+            f"{structural_null_counts[column]:,}"
+        )
+
+    print(
+        "\nNULLs estruturais inesperados:"
+    )
+
+    for column in structural_nullable_columns:
+        print(
+            f"  {column}: "
+            f"{unexpected_structural_null_counts[column]:,}"
+        )
+
+    print(
+        "\nValores inesperados "
+        "na primeira observação:"
+    )
+
+    for column in structural_nullable_columns:
+        print(
+            f"  {column}: "
+            f"{unexpected_structural_non_null_counts[column]:,}"
+        )
+
+    print(
+        f"\nclose_price_raw inválidos: "
+        f"{invalid_raw_prices:,}"
+    )
+
+    print(
+        f"close_price_adjusted inválidos: "
+        f"{invalid_adjusted_prices:,}"
+    )
+
+    print(
+        "daily_return_economic "
+        "não finitos: "
+        f"{non_finite_economic_returns:,}"
+    )
+
+    print(
+        "PENDING_REVIEW: "
+        f"{pending_count:,}"
+    )
+
+    print(
+        "Versões adjusted inválidas: "
+        f"{len(invalid_versions):,}"
+    )
+
+    print(
+        "Sources adjusted inválidos: "
+        f"{len(invalid_sources):,}"
     )
 
     if duplicate_count > 0:
         raise ValueError(
-            "Histórico contém duplicidade "
-            "ticker + trade_date."
+            "Adjusted Prices possui "
+            "duplicidades."
         )
 
-    required_columns = [
-        "trade_date",
-        "ticker",
-        "cnpj",
-        "close_price",
-    ]
+    if strictly_required_null_count > 0:
+        raise ValueError(
+            "Adjusted Prices possui NULL "
+            "em campo realmente obrigatório."
+        )
 
-    null_counts = (
-        dataframe[
-            required_columns
-        ]
-        .isna()
-        .sum()
-    )
+    if any(
+        count > 0
+        for count
+        in unexpected_structural_null_counts.values()
+    ):
+        raise ValueError(
+            "Adjusted Prices possui NULL "
+            "estrutural fora da primeira "
+            "observação do ticker."
+        )
+
+    if any(
+        count > 0
+        for count
+        in unexpected_structural_non_null_counts.values()
+    ):
+        raise ValueError(
+            "Adjusted Prices possui retorno "
+            "preenchido indevidamente na "
+            "primeira observação do ticker."
+        )
+
+    if invalid_raw_prices > 0:
+        raise ValueError(
+            "Adjusted Prices possui "
+            "close_price_raw inválido."
+        )
+
+    if invalid_adjusted_prices > 0:
+        raise ValueError(
+            "Adjusted Prices possui "
+            "close_price_adjusted inválido."
+        )
+
+    if non_finite_economic_returns > 0:
+        raise ValueError(
+            "Adjusted Prices possui "
+            "daily_return_economic "
+            "não finito."
+        )
+
+    if invalid_versions:
+        raise ValueError(
+            "Price History v2 exige "
+            "Adjusted Prices v2."
+        )
+
+    if invalid_sources:
+        raise ValueError(
+            "Adjusted Prices possui "
+            "source inesperado: "
+            f"{invalid_sources}"
+        )
+
+    if pending_count > 0:
+        raise ValueError(
+            "Price History v2 não será "
+            "construído enquanto existirem "
+            "Corporate Actions "
+            "PENDING_REVIEW."
+        )
 
     print(
-        "\nCampos obrigatórios nulos:"
+        "\nData Quality aprovada."
     )
 
-    for column, count in null_counts.items():
-        print(
-            f"  {column}: "
-            f"{count:,}"
-        )
 
-    if (
-        null_counts
-        > 0
-    ).any():
-        raise ValueError(
-            "Histórico contém campos "
-            "obrigatórios nulos."
-        )
-
-
-def calculate_daily_return(
+def build_analytics_base(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Calcula retorno diário close-to-close.
+    Constrói aliases semânticos usados
+    pelo contrato histórico.
+
+    As colunas legadas permanecem para
+    compatibilidade downstream, mas passam
+    a representar a série corrigida.
+
+    close_price
+        = close_price_adjusted
+
+    daily_return
+        = daily_return_economic
     """
 
     result = dataframe.copy()
@@ -338,18 +557,48 @@ def calculate_daily_return(
         drop=True
     )
 
+    #
+    # Contrato principal da Analytics.
+    #
+    result[
+        "open_price"
+    ] = result[
+        "open_price_adjusted"
+    ]
+
+    result[
+        "low_price"
+    ] = result[
+        "low_price_adjusted"
+    ]
+
+    result[
+        "high_price"
+    ] = result[
+        "high_price_adjusted"
+    ]
+
+    result[
+        "average_price"
+    ] = result[
+        "average_price_adjusted"
+    ]
+
+    result[
+        "close_price"
+    ] = result[
+        "close_price_adjusted"
+    ]
+
+    #
+    # A partir da v2, daily_return significa
+    # retorno econômico.
+    #
     result[
         "daily_return"
-    ] = (
-        result.groupby(
-            "ticker"
-        )[
-            "close_price"
-        ]
-        .pct_change(
-            fill_method=None
-        )
-    )
+    ] = result[
+        "daily_return_economic"
+    ]
 
     result[
         "daily_return_pct"
@@ -363,23 +612,86 @@ def calculate_daily_return(
     return result
 
 
+def calculate_observation_count(
+    dataframe: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Número acumulado de observações
+    disponíveis por ticker.
+    """
+
+    result = dataframe.copy()
+
+    result[
+        "observations_count"
+    ] = (
+        result.groupby(
+            "ticker",
+            sort=False,
+        )
+        .cumcount()
+        + 1
+    )
+
+    return result
+
+
+def compound_returns(
+    series: pd.Series,
+    window: int,
+) -> pd.Series:
+    """
+    Composição geométrica de N retornos
+    econômicos consecutivos.
+
+    (1+r1)*(1+r2)*...*(1+rN)-1
+
+    Diferentemente de close_t / close_t-N,
+    esta fórmula incorpora cash flows
+    econômicos registrados no período.
+    """
+
+    return (
+        series
+        .rolling(
+            window=window,
+            min_periods=window,
+        )
+        .apply(
+            lambda values: (
+                np.prod(
+                    1.0 + values
+                )
+                - 1.0
+            ),
+            raw=True,
+        )
+    )
+
+
 def calculate_window_features(
     dataframe: pd.DataFrame,
     windows: list[int],
 ) -> pd.DataFrame:
     """
-    Cria dinamicamente as features
-    temporais para cada janela.
+    Cria features temporais com
+    semântica econômica.
 
-    Para window=5, por exemplo:
+    return_Nd
+        composição dos N
+        daily_return_economic.
 
-    return_5d
-    return_5d_pct
-    ma_5
-    volatility_5d
-    volatility_5d_pct
-    trades_avg_5d
-    price_to_ma5
+    ma_N
+        média do close_price_adjusted.
+
+    volatility_Nd
+        std dos N retornos econômicos.
+
+    trades_avg_Nd
+        média de trades_quantity.
+
+    price_to_maN
+        close_price_adjusted / ma_N.
     """
 
     result = dataframe.copy()
@@ -391,12 +703,6 @@ def calculate_window_features(
             f"{window} pregões..."
         )
 
-        # -------------------------------------
-        # Retorno acumulado
-        #
-        # close_t / close_t-N - 1
-        # -------------------------------------
-
         return_column = (
             f"return_{window}d"
         )
@@ -405,17 +711,46 @@ def calculate_window_features(
             f"return_{window}d_pct"
         )
 
+        ma_column = (
+            f"ma_{window}"
+        )
+
+        volatility_column = (
+            f"volatility_{window}d"
+        )
+
+        volatility_pct_column = (
+            f"volatility_{window}d_pct"
+        )
+
+        trades_avg_column = (
+            f"trades_avg_{window}d"
+        )
+
+        price_to_ma_column = (
+            f"price_to_ma{window}"
+        )
+
+        #
+        # Retorno econômico acumulado.
+        #
         result[
             return_column
         ] = (
-            result.groupby(
-                "ticker"
+            result
+            .groupby(
+                "ticker",
+                sort=False,
             )[
-                "close_price"
+                "daily_return"
             ]
-            .pct_change(
-                periods=window,
-                fill_method=None,
+            .transform(
+                lambda series: (
+                    compound_returns(
+                        series=series,
+                        window=window,
+                    )
+                )
             )
         )
 
@@ -428,19 +763,16 @@ def calculate_window_features(
             * 100
         )
 
-        # -------------------------------------
-        # Média móvel
-        # -------------------------------------
-
-        ma_column = (
-            f"ma_{window}"
-        )
-
+        #
+        # Média móvel sobre preço ajustado.
+        #
         result[
             ma_column
         ] = (
-            result.groupby(
-                "ticker"
+            result
+            .groupby(
+                "ticker",
+                sort=False,
             )[
                 "close_price"
             ]
@@ -455,26 +787,17 @@ def calculate_window_features(
             )
         )
 
-        # -------------------------------------
-        # Volatilidade
         #
-        # Desvio padrão dos últimos
-        # N retornos diários.
-        # -------------------------------------
-
-        volatility_column = (
-            f"volatility_{window}d"
-        )
-
-        volatility_pct_column = (
-            f"volatility_{window}d_pct"
-        )
-
+        # Volatilidade dos retornos
+        # econômicos.
+        #
         result[
             volatility_column
         ] = (
-            result.groupby(
-                "ticker"
+            result
+            .groupby(
+                "ticker",
+                sort=False,
             )[
                 "daily_return"
             ]
@@ -498,19 +821,17 @@ def calculate_window_features(
             * 100
         )
 
-        # -------------------------------------
-        # Liquidez proxy
-        # -------------------------------------
-
-        trades_avg_column = (
-            f"trades_avg_{window}d"
-        )
-
+        #
+        # Liquidez continua sendo observada
+        # diretamente da negociação B3.
+        #
         result[
             trades_avg_column
         ] = (
-            result.groupby(
-                "ticker"
+            result
+            .groupby(
+                "ticker",
+                sort=False,
             )[
                 "trades_quantity"
             ]
@@ -523,14 +844,6 @@ def calculate_window_features(
                 level=0,
                 drop=True,
             )
-        )
-
-        # -------------------------------------
-        # Relação preço / média móvel
-        # -------------------------------------
-
-        price_to_ma_column = (
-            f"price_to_ma{window}"
         )
 
         result[
@@ -547,37 +860,9 @@ def calculate_window_features(
     return result
 
 
-def calculate_observation_count(
-    dataframe: pd.DataFrame,
-) -> pd.DataFrame:
-    """
-    Número acumulado de observações
-    disponíveis por ticker.
-    """
-
-    result = dataframe.copy()
-
-    result[
-        "observations_count"
-    ] = (
-        result.groupby(
-            "ticker"
-        )
-        .cumcount()
-        + 1
-    )
-
-    return result
-
-
 def build_dynamic_feature_columns(
     windows: list[int],
 ) -> list[str]:
-    """
-    Constrói dinamicamente o contrato
-    das features temporais.
-    """
-
     columns: list[str] = [
         "daily_return",
         "daily_return_pct",
@@ -604,7 +889,10 @@ def select_gold_columns(
     windows: list[int],
 ) -> pd.DataFrame:
     """
-    Monta o contrato Gold dinamicamente.
+    Monta o contrato Gold v2.
+
+    Mantém o contrato principal antigo
+    e adiciona trilha de auditoria.
     """
 
     identity_columns = [
@@ -613,12 +901,58 @@ def select_gold_columns(
         "cnpj",
         "codigo_cvm",
         "instrument_id",
+    ]
+
+    #
+    # Contrato compatível com a camada
+    # de features já existente.
+    #
+    analytics_price_columns = [
         "open_price",
         "low_price",
         "high_price",
         "average_price",
         "close_price",
         "trades_quantity",
+    ]
+
+    audit_price_columns = [
+        "open_price_raw",
+        "low_price_raw",
+        "high_price_raw",
+        "average_price_raw",
+        "close_price_raw",
+
+        "open_price_adjusted",
+        "low_price_adjusted",
+        "high_price_adjusted",
+        "average_price_adjusted",
+        "close_price_adjusted",
+
+        "structural_adjustment_factor",
+
+        "cash_flow_per_unit_raw",
+        "cash_flow_per_unit_adjusted",
+
+        "daily_return_raw",
+        "daily_return_adjusted_price",
+        "daily_return_economic",
+    ]
+
+    governance_columns = [
+        "review_status_on_date",
+        "event_type_on_date",
+        "discontinuity_confidence_on_date",
+
+        "confirmed_action_on_date",
+        "pending_review_on_date",
+
+        "confirmed_event_type",
+        "confirmed_quantity_multiplier",
+        "confirmed_price_adjustment_factor",
+        "confirmed_cash_amount_per_unit",
+        "confirmed_action_source",
+        "confirmed_action_confirmation_date",
     ]
 
     feature_columns = (
@@ -631,17 +965,42 @@ def select_gold_columns(
         "observations_count",
         "ticker_resolution_status",
         "market_evidence_confidence",
+        "adjusted_prices_version",
+        "adjusted_prices_source",
     ]
 
     columns = (
         identity_columns
+        + analytics_price_columns
+        + audit_price_columns
         + feature_columns
+        + governance_columns
         + metadata_columns
     )
 
     gold = dataframe[
         columns
     ].copy()
+
+    gold[
+        "price_history_version"
+    ] = PRICE_HISTORY_VERSION
+
+    gold[
+        "price_history_source"
+    ] = PRICE_HISTORY_SOURCE
+
+    gold[
+        "return_semantics"
+    ] = (
+        "COMPOUNDED_DAILY_RETURN_ECONOMIC"
+    )
+
+    gold[
+        "price_semantics"
+    ] = (
+        "STRUCTURALLY_ADJUSTED_PRICE"
+    )
 
     gold[
         "gold_created_at"
@@ -664,7 +1023,8 @@ def validate_dynamic_features(
     windows: list[int],
 ) -> None:
     """
-    Data Quality dinâmica das features.
+    Valida disponibilidade temporal
+    e consistência das features.
     """
 
     print(
@@ -682,7 +1042,7 @@ def validate_dynamic_features(
         f"{len(dataframe):,}"
     )
 
-    daily_return_count = (
+    daily_return_count = int(
         dataframe[
             "daily_return"
         ]
@@ -695,12 +1055,14 @@ def validate_dynamic_features(
         f"{daily_return_count:,}"
     )
 
-    invalid_observation_count = (
-        dataframe[
-            "observations_count"
-        ]
-        <= 0
-    ).sum()
+    invalid_observation_count = int(
+        (
+            dataframe[
+                "observations_count"
+            ]
+            <= 0
+        ).sum()
+    )
 
     if invalid_observation_count > 0:
         raise ValueError(
@@ -743,7 +1105,7 @@ def validate_dynamic_features(
 
         for column in feature_columns:
 
-            available = (
+            available = int(
                 dataframe[
                     column
                 ]
@@ -756,11 +1118,10 @@ def validate_dynamic_features(
                 f"{available:,}"
             )
 
-        # -------------------------------------
-        # MA e trades_avg precisam de
-        # N observações.
-        # -------------------------------------
-
+        #
+        # MA e média de trades:
+        # N preços/observações.
+        #
         invalid_ma = dataframe[
             (
                 dataframe[
@@ -799,13 +1160,10 @@ def validate_dynamic_features(
                 f"antes de {window} observações."
             )
 
-        # -------------------------------------
-        # Return_Nd precisa comparar
-        # T com T-N.
         #
-        # Portanto precisa de N+1 preços.
-        # -------------------------------------
-
+        # N retornos econômicos exigem
+        # N+1 observações de preço.
+        #
         minimum_return_observations = (
             window + 1
         )
@@ -831,11 +1189,6 @@ def validate_dynamic_features(
                 f"observações."
             )
 
-        # -------------------------------------
-        # Volatilidade de N retornos também
-        # exige N+1 preços.
-        # -------------------------------------
-
         invalid_volatility = dataframe[
             (
                 dataframe[
@@ -857,11 +1210,6 @@ def validate_dynamic_features(
                 f"observações."
             )
 
-        # -------------------------------------
-        # price_to_maN não pode existir
-        # sem ma_N.
-        # -------------------------------------
-
         invalid_price_to_ma = dataframe[
             dataframe[
                 price_to_ma_column
@@ -878,8 +1226,232 @@ def validate_dynamic_features(
                 f"sem {ma_column}."
             )
 
+        non_finite_return = int(
+            (
+                dataframe[
+                    return_column
+                ].notna()
+                &
+                ~np.isfinite(
+                    dataframe[
+                        return_column
+                    ]
+                )
+            ).sum()
+        )
+
+        non_finite_volatility = int(
+            (
+                dataframe[
+                    volatility_column
+                ].notna()
+                &
+                ~np.isfinite(
+                    dataframe[
+                        volatility_column
+                    ]
+                )
+            ).sum()
+        )
+
+        if non_finite_return > 0:
+            raise ValueError(
+                f"{return_column} possui "
+                "valor não finito."
+            )
+
+        if non_finite_volatility > 0:
+            raise ValueError(
+                f"{volatility_column} possui "
+                "valor não finito."
+            )
+
     print(
         "\nData Quality das features aprovada."
+    )
+
+
+def validate_semantic_aliases(
+    dataframe: pd.DataFrame,
+) -> None:
+    """
+    Garante que o contrato principal
+    realmente aponta para a série
+    econômica/ajustada.
+    """
+
+    close_mismatch = int(
+        (
+            ~np.isclose(
+                dataframe[
+                    "close_price"
+                ],
+                dataframe[
+                    "close_price_adjusted"
+                ],
+                rtol=0.0,
+                atol=1e-12,
+            )
+        ).sum()
+    )
+
+    daily_mask = (
+        dataframe[
+            "daily_return"
+        ].notna()
+        &
+        dataframe[
+            "daily_return_economic"
+        ].notna()
+    )
+
+    daily_return_mismatch = int(
+        (
+            ~np.isclose(
+                dataframe.loc[
+                    daily_mask,
+                    "daily_return",
+                ],
+                dataframe.loc[
+                    daily_mask,
+                    "daily_return_economic",
+                ],
+                rtol=0.0,
+                atol=1e-12,
+            )
+        ).sum()
+    )
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Validação - Semântica v2"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        "close_price != "
+        "close_price_adjusted: "
+        f"{close_mismatch:,}"
+    )
+
+    print(
+        "daily_return != "
+        "daily_return_economic: "
+        f"{daily_return_mismatch:,}"
+    )
+
+    if close_mismatch > 0:
+        raise ValueError(
+            "close_price não representa "
+            "close_price_adjusted."
+        )
+
+    if daily_return_mismatch > 0:
+        raise ValueError(
+            "daily_return não representa "
+            "daily_return_economic."
+        )
+
+    print(
+        "\nSemântica v2 aprovada."
+    )
+
+
+def validate_known_corporate_actions(
+    dataframe: pd.DataFrame,
+) -> None:
+    """
+    Exibe os oito eventos governados para
+    permitir comparação direta entre RAW
+    e série econômica.
+    """
+
+    event_rows = dataframe[
+        dataframe[
+            "confirmed_action_on_date"
+        ]
+    ].copy()
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Validação - Corporate Actions"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        f"Eventos confirmados encontrados: "
+        f"{len(event_rows):,}"
+    )
+
+    if event_rows.empty:
+        return
+
+    display_columns = [
+        "ticker",
+        "trade_date",
+        "confirmed_event_type",
+        "daily_return_raw",
+        "daily_return_adjusted_price",
+        "daily_return_economic",
+    ]
+
+    display = event_rows[
+        display_columns
+    ].sort_values(
+        [
+            "trade_date",
+            "ticker",
+        ]
+    ).copy()
+
+    display[
+        "daily_return_raw_pct"
+    ] = (
+        display[
+            "daily_return_raw"
+        ]
+        * 100
+    )
+
+    display[
+        "daily_return_adjusted_price_pct"
+    ] = (
+        display[
+            "daily_return_adjusted_price"
+        ]
+        * 100
+    )
+
+    display[
+        "daily_return_economic_pct"
+    ] = (
+        display[
+            "daily_return_economic"
+        ]
+        * 100
+    )
+
+    print(
+        display[
+            [
+                "ticker",
+                "trade_date",
+                "confirmed_event_type",
+                "daily_return_raw_pct",
+                "daily_return_adjusted_price_pct",
+                "daily_return_economic_pct",
+            ]
+        ].to_string(
+            index=False
+        )
     )
 
 
@@ -887,10 +1459,6 @@ def save_gold(
     dataframe: pd.DataFrame,
     destination: Path,
 ) -> None:
-    """
-    Persiste a Gold Analytics em Parquet.
-    """
-
     destination.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -906,10 +1474,6 @@ def print_history_summary(
     dataframe: pd.DataFrame,
     windows: list[int],
 ) -> None:
-    """
-    Exibe resumo final.
-    """
-
     min_date = (
         dataframe[
             "trade_date"
@@ -933,11 +1497,31 @@ def print_history_summary(
         .size()
     )
 
-    total_trading_days = (
+    total_trading_days = int(
         dataframe[
             "trade_date"
         ]
         .nunique()
+    )
+
+    structural_adjusted_rows = int(
+        (
+            ~np.isclose(
+                dataframe[
+                    "structural_adjustment_factor"
+                ],
+                1.0,
+            )
+        ).sum()
+    )
+
+    cash_flow_rows = int(
+        (
+            dataframe[
+                "cash_flow_per_unit_adjusted"
+            ]
+            > 0
+        ).sum()
     )
 
     print(
@@ -948,6 +1532,16 @@ def print_history_summary(
     )
     print(
         "======================================"
+    )
+
+    print(
+        f"Version: "
+        f"{PRICE_HISTORY_VERSION}"
+    )
+
+    print(
+        f"Source: "
+        f"{PRICE_HISTORY_SOURCE}"
     )
 
     print(
@@ -982,6 +1576,16 @@ def print_history_summary(
     )
 
     print(
+        "Linhas estruturalmente ajustadas: "
+        f"{structural_adjusted_rows:,}"
+    )
+
+    print(
+        "Linhas com cash flow corporativo: "
+        f"{cash_flow_rows:,}"
+    )
+
+    print(
         f"Janelas calculadas: "
         f"{windows}"
     )
@@ -1006,16 +1610,45 @@ def print_history_summary(
         )
 
         print(
-            f"  Linhas com {volatility_column}: "
+            f"  Linhas com "
+            f"{volatility_column}: "
             f"{dataframe[volatility_column].notna().sum():,}"
         )
+
+    print(
+        "\nSemântica:"
+    )
+
+    print(
+        "  close_price = "
+        "close_price_adjusted"
+    )
+
+    print(
+        "  daily_return = "
+        "daily_return_economic"
+    )
+
+    print(
+        "  return_Nd = composição dos "
+        "retornos econômicos"
+    )
+
+    print(
+        "  ma_N = média do preço ajustado"
+    )
+
+    print(
+        "  volatility_Nd = std dos "
+        "retornos econômicos"
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Constrói Gold Analytics "
-            "FII Price History."
+            "FII Price History v2."
         )
     )
 
@@ -1042,30 +1675,31 @@ def main() -> None:
     )
 
     print(
+        f"Version: "
+        f"{PRICE_HISTORY_VERSION}"
+    )
+
+    print(
+        f"Source: "
+        f"{PRICE_HISTORY_SOURCE}"
+    )
+
+    print(
         f"Janelas temporais: "
         f"{windows}"
     )
 
-    silver_files = (
-        find_all_silver_price_files(
-            SILVER_PRICES_BASE_DIR
-        )
-    )
+    history = load_adjusted_prices()
 
-    print(
-        f"\nPartições Silver encontradas: "
-        f"{len(silver_files):,}"
-    )
-
-    history = load_price_history(
-        silver_files
-    )
-
-    validate_base_history(
+    validate_source(
         history
     )
 
-    history = calculate_daily_return(
+    history = build_analytics_base(
+        history
+    )
+
+    history = calculate_observation_count(
         history
     )
 
@@ -1074,18 +1708,22 @@ def main() -> None:
         windows=windows,
     )
 
-    history = calculate_observation_count(
-        history
-    )
-
     gold = select_gold_columns(
         dataframe=history,
         windows=windows,
     )
 
+    validate_semantic_aliases(
+        gold
+    )
+
     validate_dynamic_features(
         dataframe=gold,
         windows=windows,
+    )
+
+    validate_known_corporate_actions(
+        gold
     )
 
     save_gold(
@@ -1108,8 +1746,28 @@ def main() -> None:
 
     print(
         "\nGold Analytics "
-        "FII Price History criada "
+        "FII Price History v2 criada "
         "com sucesso."
+    )
+
+    print(
+        "A camada usa exclusivamente "
+        "Corporate Action Adjusted Prices."
+    )
+
+    print(
+        "O contrato legado foi preservado "
+        "para compatibilidade downstream."
+    )
+
+    print(
+        "Os retornos rolling agora possuem "
+        "semântica econômica."
+    )
+
+    print(
+        "Preços RAW e informações de "
+        "governança permanecem auditáveis."
     )
 
 

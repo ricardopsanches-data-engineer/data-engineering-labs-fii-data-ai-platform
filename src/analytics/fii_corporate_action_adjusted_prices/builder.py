@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,13 +11,11 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
-PRICE_HISTORY_PATH = (
+SILVER_PRICES_BASE_DIR = (
     PROJECT_ROOT
     / "data"
-    / "gold"
-    / "analytics"
-    / "fii_price_history"
-    / "fii_price_history.parquet"
+    / "silver"
+    / "fii_daily_prices"
 )
 
 DISCONTINUITIES_PATH = (
@@ -42,7 +41,7 @@ OUTPUT_PATH = (
 )
 
 
-ADJUSTED_PRICES_VERSION = "v1"
+ADJUSTED_PRICES_VERSION = "v2"
 
 
 STRUCTURAL_EVENT_TYPES = {
@@ -55,40 +54,177 @@ CASH_EVENT_TYPES = {
 }
 
 
-def load_price_history() -> pd.DataFrame:
-    if not PRICE_HISTORY_PATH.exists():
-        raise FileNotFoundError(
-            "FII Price History não encontrado: "
-            f"{PRICE_HISTORY_PATH}"
+PARTITION_PATTERN = re.compile(
+    r"year=(\d{4}).*month=(\d{2}).*day=(\d{2})"
+)
+
+
+RAW_PRICE_COLUMNS = [
+    "open_price",
+    "low_price",
+    "high_price",
+    "average_price",
+    "close_price",
+]
+
+
+def extract_partition_date(
+    path: Path,
+) -> tuple[int, int, int]:
+    """
+    Extrai YYYY/MM/DD do caminho
+    particionado da Silver.
+    """
+
+    match = PARTITION_PATTERN.search(
+        str(path.parent)
+    )
+
+    if match is None:
+        raise ValueError(
+            "Não foi possível identificar "
+            f"a data da partição: {path}"
         )
 
+    return (
+        int(match.group(1)),
+        int(match.group(2)),
+        int(match.group(3)),
+    )
+
+
+def find_all_silver_price_files(
+    base_directory: Path,
+) -> list[Path]:
+    """
+    Localiza todas as partições Silver
+    de FII Daily Prices.
+    """
+
+    files = list(
+        base_directory.rglob(
+            "fii_daily_prices.parquet"
+        )
+    )
+
+    if not files:
+        raise FileNotFoundError(
+            "Nenhuma Silver de preços encontrada "
+            f"em {base_directory}"
+        )
+
+    return sorted(
+        files,
+        key=extract_partition_date,
+    )
+
+
+def validate_silver_partition_schema(
+    dataframe: pd.DataFrame,
+    source_path: Path,
+) -> None:
+    """
+    Valida o contrato mínimo de uma
+    partição Silver.
+    """
+
+    required_columns = [
+        "trade_date",
+        "ticker",
+        "cnpj",
+        "codigo_cvm",
+        "instrument_id",
+        "open_price",
+        "low_price",
+        "high_price",
+        "average_price",
+        "close_price",
+        "trades_quantity",
+        "ticker_resolution_status",
+        "market_evidence_confidence",
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"Arquivo {source_path} possui "
+            f"colunas ausentes: {missing_columns}"
+        )
+
+
+def load_silver_prices(
+    silver_files: list[Path],
+) -> pd.DataFrame:
+    """
+    Carrega diretamente todas as partições
+    Silver de preços.
+
+    Esta camada NÃO depende mais de
+    fii_price_history.
+    """
+
+    dataframes: list[pd.DataFrame] = []
+
     print(
-        "Carregando FII Price History..."
+        "\n======================================"
+    )
+    print(
+        "Carregando Silver FII Daily Prices"
+    )
+    print(
+        "======================================"
     )
 
-    dataframe = pd.read_parquet(
-        PRICE_HISTORY_PATH,
-        columns=[
-            "trade_date",
-            "ticker",
-            "cnpj",
-            "codigo_cvm",
-            "close_price",
-        ],
+    for index, path in enumerate(
+        silver_files,
+        start=1,
+    ):
+        year, month, day = (
+            extract_partition_date(
+                path
+            )
+        )
+
+        print(
+            f"[{index}/{len(silver_files)}] "
+            f"{year:04d}-{month:02d}-{day:02d}"
+        )
+
+        dataframe = pd.read_parquet(
+            path
+        )
+
+        validate_silver_partition_schema(
+            dataframe=dataframe,
+            source_path=path,
+        )
+
+        dataframes.append(
+            dataframe
+        )
+
+    prices = pd.concat(
+        dataframes,
+        ignore_index=True,
     )
 
-    dataframe[
+    prices[
         "trade_date"
     ] = pd.to_datetime(
-        dataframe[
+        prices[
             "trade_date"
         ]
     )
 
-    dataframe[
+    prices[
         "ticker"
     ] = (
-        dataframe[
+        prices[
             "ticker"
         ]
         .astype("string")
@@ -96,7 +232,226 @@ def load_price_history() -> pd.DataFrame:
         .str.upper()
     )
 
-    return dataframe
+    return prices
+
+
+def validate_silver_prices(
+    dataframe: pd.DataFrame,
+) -> None:
+    """
+    Data Quality da fonte Silver consolidada.
+    """
+
+    required_columns = [
+        "trade_date",
+        "ticker",
+        "cnpj",
+        "codigo_cvm",
+        "instrument_id",
+        "open_price",
+        "low_price",
+        "high_price",
+        "average_price",
+        "close_price",
+        "trades_quantity",
+        "ticker_resolution_status",
+        "market_evidence_confidence",
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "Silver consolidada possui "
+            f"colunas ausentes: {missing_columns}"
+        )
+
+    duplicate_count = int(
+        dataframe.duplicated(
+            subset=[
+                "trade_date",
+                "ticker",
+            ]
+        ).sum()
+    )
+
+    null_count = int(
+        dataframe[
+            required_columns
+        ]
+        .isna()
+        .sum()
+        .sum()
+    )
+
+    invalid_close_prices = int(
+        (
+            dataframe[
+                "close_price"
+            ]
+            <= 0
+        ).sum()
+    )
+
+    invalid_open_prices = int(
+        (
+            dataframe[
+                "open_price"
+            ]
+            <= 0
+        ).sum()
+    )
+
+    invalid_low_prices = int(
+        (
+            dataframe[
+                "low_price"
+            ]
+            <= 0
+        ).sum()
+    )
+
+    invalid_high_prices = int(
+        (
+            dataframe[
+                "high_price"
+            ]
+            <= 0
+        ).sum()
+    )
+
+    invalid_average_prices = int(
+        (
+            dataframe[
+                "average_price"
+            ]
+            <= 0
+        ).sum()
+    )
+
+    invalid_trades = int(
+        (
+            dataframe[
+                "trades_quantity"
+            ]
+            < 0
+        ).sum()
+    )
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Data Quality - Silver Prices"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        f"Linhas: "
+        f"{len(dataframe):,}"
+    )
+
+    print(
+        f"Tickers: "
+        f"{dataframe['ticker'].nunique():,}"
+    )
+
+    print(
+        f"Pregões: "
+        f"{dataframe['trade_date'].nunique():,}"
+    )
+
+    print(
+        f"Duplicidades: "
+        f"{duplicate_count:,}"
+    )
+
+    print(
+        f"Nulos obrigatórios: "
+        f"{null_count:,}"
+    )
+
+    print(
+        f"close_price inválidos: "
+        f"{invalid_close_prices:,}"
+    )
+
+    print(
+        f"open_price inválidos: "
+        f"{invalid_open_prices:,}"
+    )
+
+    print(
+        f"low_price inválidos: "
+        f"{invalid_low_prices:,}"
+    )
+
+    print(
+        f"high_price inválidos: "
+        f"{invalid_high_prices:,}"
+    )
+
+    print(
+        f"average_price inválidos: "
+        f"{invalid_average_prices:,}"
+    )
+
+    print(
+        f"trades_quantity inválidos: "
+        f"{invalid_trades:,}"
+    )
+
+    if duplicate_count > 0:
+        raise ValueError(
+            "Silver possui duplicidades."
+        )
+
+    if null_count > 0:
+        raise ValueError(
+            "Silver possui campos "
+            "obrigatórios nulos."
+        )
+
+    if invalid_close_prices > 0:
+        raise ValueError(
+            "Silver possui close_price inválido."
+        )
+
+    if invalid_open_prices > 0:
+        raise ValueError(
+            "Silver possui open_price inválido."
+        )
+
+    if invalid_low_prices > 0:
+        raise ValueError(
+            "Silver possui low_price inválido."
+        )
+
+    if invalid_high_prices > 0:
+        raise ValueError(
+            "Silver possui high_price inválido."
+        )
+
+    if invalid_average_prices > 0:
+        raise ValueError(
+            "Silver possui average_price inválido."
+        )
+
+    if invalid_trades > 0:
+        raise ValueError(
+            "Silver possui trades_quantity "
+            "inválido."
+        )
+
+    print(
+        "\nData Quality aprovada."
+    )
 
 
 def load_discontinuities() -> pd.DataFrame:
@@ -107,7 +462,7 @@ def load_discontinuities() -> pd.DataFrame:
         )
 
     print(
-        "Carregando FII Price Discontinuities..."
+        "\nCarregando FII Price Discontinuities..."
     )
 
     dataframe = pd.read_parquet(
@@ -172,113 +527,6 @@ def load_discontinuities() -> pd.DataFrame:
     return dataframe
 
 
-def validate_price_history(
-    dataframe: pd.DataFrame,
-) -> None:
-    required_columns = [
-        "trade_date",
-        "ticker",
-        "cnpj",
-        "codigo_cvm",
-        "close_price",
-    ]
-
-    missing_columns = [
-        column
-        for column in required_columns
-        if column not in dataframe.columns
-    ]
-
-    if missing_columns:
-        raise ValueError(
-            "Price History possui "
-            f"colunas ausentes: {missing_columns}"
-        )
-
-    duplicate_count = int(
-        dataframe.duplicated(
-            subset=[
-                "trade_date",
-                "ticker",
-            ]
-        ).sum()
-    )
-
-    null_count = int(
-        dataframe[
-            required_columns
-        ]
-        .isna()
-        .sum()
-        .sum()
-    )
-
-    invalid_prices = int(
-        (
-            dataframe[
-                "close_price"
-            ]
-            <= 0
-        ).sum()
-    )
-
-    print(
-        "\n======================================"
-    )
-    print(
-        "Data Quality - Price History"
-    )
-    print(
-        "======================================"
-    )
-
-    print(
-        f"Linhas: "
-        f"{len(dataframe):,}"
-    )
-
-    print(
-        f"Tickers: "
-        f"{dataframe['ticker'].nunique():,}"
-    )
-
-    print(
-        f"Duplicidades: "
-        f"{duplicate_count:,}"
-    )
-
-    print(
-        f"Nulos obrigatórios: "
-        f"{null_count:,}"
-    )
-
-    print(
-        f"Preços inválidos: "
-        f"{invalid_prices:,}"
-    )
-
-    if duplicate_count > 0:
-        raise ValueError(
-            "Price History possui duplicidades."
-        )
-
-    if null_count > 0:
-        raise ValueError(
-            "Price History possui "
-            "campos obrigatórios nulos."
-        )
-
-    if invalid_prices > 0:
-        raise ValueError(
-            "Price History possui "
-            "preços inválidos."
-        )
-
-    print(
-        "\nData Quality aprovada."
-    )
-
-
 def get_confirmed_actions(
     discontinuities: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -319,7 +567,7 @@ def get_confirmed_actions(
         raise ValueError(
             "Corporate Actions confirmados "
             "com event_type ainda não "
-            "suportado pela camada v1: "
+            "suportado: "
             f"{unsupported_types}"
         )
 
@@ -385,6 +633,32 @@ def get_confirmed_actions(
             raise ValueError(
                 "SPLIT/REVERSE_SPLIT confirmado "
                 "sem quantity_multiplier válido."
+            )
+
+        product = (
+            structural[
+                "quantity_multiplier"
+            ].astype(float)
+            * structural[
+                "price_adjustment_factor"
+            ].astype(float)
+        )
+
+        invalid_reciprocal = (
+            ~np.isclose(
+                product,
+                1.0,
+                rtol=0.05,
+                atol=0.0,
+            )
+        )
+
+        if invalid_reciprocal.any():
+            raise ValueError(
+                "SPLIT/REVERSE_SPLIT possui "
+                "quantity_multiplier e "
+                "price_adjustment_factor "
+                "não recíprocos."
             )
 
     cash_events = confirmed[
@@ -453,7 +727,7 @@ def get_confirmed_actions(
 
 
 def validate_event_dates(
-    price_history: pd.DataFrame,
+    silver_prices: pd.DataFrame,
     confirmed_actions: pd.DataFrame,
 ) -> None:
     if confirmed_actions.empty:
@@ -461,10 +735,10 @@ def validate_event_dates(
 
     available_keys = set(
         zip(
-            price_history[
+            silver_prices[
                 "ticker"
             ],
-            price_history[
+            silver_prices[
                 "trade_date"
             ],
         )
@@ -484,12 +758,8 @@ def validate_event_dates(
             missing_events.append(
                 {
                     "ticker": row.ticker,
-                    "event_date": (
-                        row.event_date
-                    ),
-                    "event_type": (
-                        row.event_type
-                    ),
+                    "event_date": row.event_date,
+                    "event_type": row.event_type,
                 }
             )
 
@@ -500,35 +770,32 @@ def validate_event_dates(
 
         raise ValueError(
             "Corporate Action confirmado "
-            "sem preço disponível na "
-            "event_date:\n"
+            "sem preço Silver disponível "
+            "na event_date:\n"
             f"{missing_dataframe.to_string(index=False)}"
         )
 
 
 def build_structural_adjustment_factor(
-    price_history: pd.DataFrame,
+    silver_prices: pd.DataFrame,
     confirmed_actions: pd.DataFrame,
 ) -> pd.DataFrame:
     """
     Constrói fator estrutural retroativo.
 
-    Para um SPLIT com fator 0.10 em D:
+    SPLIT com fator 0.10 em D:
 
-    datas < D:
-        structural_adjustment_factor *= 0.10
+    datas < D
+        factor *= 0.10
 
-    datas >= D:
-        o evento já está refletido no preço
-        bruto e não aplicamos o fator daquele
-        evento novamente.
+    datas >= D
+        o preço bruto já está na nova escala.
 
-    Caso existam múltiplos eventos estruturais
-    futuros para um ticker, os fatores são
+    Múltiplos eventos futuros são
     multiplicados retroativamente.
     """
 
-    result = price_history.copy()
+    result = silver_prices.copy()
 
     result[
         "structural_adjustment_factor"
@@ -674,13 +941,6 @@ def attach_event_information(
         "NONE"
     )
 
-    #
-    # Correção do FutureWarning do pandas:
-    #
-    # convertemos primeiro para nullable boolean,
-    # preenchemos os nulos e somente depois
-    # voltamos para bool nativo.
-    #
     result[
         "confirmed_action_on_date"
     ] = (
@@ -762,26 +1022,43 @@ def attach_event_information(
 def calculate_adjusted_prices(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Preserva preços RAW e cria preços
+    estruturalmente ajustados.
+
+    Todos os OHLC/average usam o mesmo
+    structural_adjustment_factor.
+    """
+
     result = dataframe.copy()
 
-    result[
-        "close_price_raw"
-    ] = result[
-        "close_price"
-    ].astype(
-        float
-    )
+    for column in RAW_PRICE_COLUMNS:
+        raw_column = (
+            f"{column}_raw"
+        )
 
-    result[
-        "close_price_adjusted"
-    ] = (
+        adjusted_column = (
+            f"{column}_adjusted"
+        )
+
         result[
-            "close_price_raw"
-        ]
-        * result[
-            "structural_adjustment_factor"
-        ]
-    )
+            raw_column
+        ] = result[
+            column
+        ].astype(
+            float
+        )
+
+        result[
+            adjusted_column
+        ] = (
+            result[
+                raw_column
+            ]
+            * result[
+                "structural_adjustment_factor"
+            ]
+        )
 
     result[
         "cash_flow_per_unit_raw"
@@ -798,8 +1075,8 @@ def calculate_adjusted_prices(
     )
 
     #
-    # Cash flow e preço ajustado devem
-    # permanecer na mesma base estrutural.
+    # Cash flow e preço precisam ficar
+    # na mesma base estrutural.
     #
     result[
         "cash_flow_per_unit_adjusted"
@@ -907,6 +1184,12 @@ def add_metadata(
     )
 
     result[
+        "adjusted_prices_source"
+    ] = (
+        "SILVER_FII_DAILY_PRICES"
+    )
+
+    result[
         "created_at"
     ] = datetime.now(
         timezone.utc
@@ -924,16 +1207,36 @@ def validate_adjusted_output(
         "ticker",
         "cnpj",
         "codigo_cvm",
+        "instrument_id",
+        "trades_quantity",
+
+        "open_price_raw",
+        "low_price_raw",
+        "high_price_raw",
+        "average_price_raw",
         "close_price_raw",
+
         "structural_adjustment_factor",
+
+        "open_price_adjusted",
+        "low_price_adjusted",
+        "high_price_adjusted",
+        "average_price_adjusted",
         "close_price_adjusted",
+
         "cash_flow_per_unit_raw",
         "cash_flow_per_unit_adjusted",
+
         "review_status_on_date",
         "event_type_on_date",
         "confirmed_action_on_date",
         "pending_review_on_date",
+
+        "ticker_resolution_status",
+        "market_evidence_confidence",
+
         "adjusted_prices_version",
+        "adjusted_prices_source",
     ]
 
     missing_columns = [
@@ -966,24 +1269,6 @@ def validate_adjusted_output(
         .sum()
     )
 
-    invalid_raw = int(
-        (
-            dataframe[
-                "close_price_raw"
-            ]
-            <= 0
-        ).sum()
-    )
-
-    invalid_adjusted = int(
-        (
-            dataframe[
-                "close_price_adjusted"
-            ]
-            <= 0
-        ).sum()
-    )
-
     invalid_factor = int(
         (
             dataframe[
@@ -1002,20 +1287,51 @@ def validate_adjusted_output(
         ).sum()
     )
 
-    raw_preservation_error = int(
-        (
-            ~np.isclose(
+    invalid_raw_prices = 0
+    invalid_adjusted_prices = 0
+    raw_preservation_error = 0
+
+    for column in RAW_PRICE_COLUMNS:
+        raw_column = (
+            f"{column}_raw"
+        )
+
+        adjusted_column = (
+            f"{column}_adjusted"
+        )
+
+        invalid_raw_prices += int(
+            (
                 dataframe[
-                    "close_price_raw"
-                ],
+                    raw_column
+                ]
+                <= 0
+            ).sum()
+        )
+
+        invalid_adjusted_prices += int(
+            (
                 dataframe[
-                    "close_price"
-                ],
-                rtol=0.0,
-                atol=1e-12,
-            )
-        ).sum()
-    )
+                    adjusted_column
+                ]
+                <= 0
+            ).sum()
+        )
+
+        raw_preservation_error += int(
+            (
+                ~np.isclose(
+                    dataframe[
+                        raw_column
+                    ],
+                    dataframe[
+                        column
+                    ],
+                    rtol=0.0,
+                    atol=1e-12,
+                )
+            ).sum()
+        )
 
     confirmed_count = int(
         dataframe[
@@ -1025,6 +1341,48 @@ def validate_adjusted_output(
 
     expected_confirmed_count = len(
         confirmed_actions
+    )
+
+    non_finite_raw_return = int(
+        (
+            dataframe[
+                "daily_return_raw"
+            ].notna()
+            &
+            ~np.isfinite(
+                dataframe[
+                    "daily_return_raw"
+                ]
+            )
+        ).sum()
+    )
+
+    non_finite_adjusted_return = int(
+        (
+            dataframe[
+                "daily_return_adjusted_price"
+            ].notna()
+            &
+            ~np.isfinite(
+                dataframe[
+                    "daily_return_adjusted_price"
+                ]
+            )
+        ).sum()
+    )
+
+    non_finite_economic_return = int(
+        (
+            dataframe[
+                "daily_return_economic"
+            ].notna()
+            &
+            ~np.isfinite(
+                dataframe[
+                    "daily_return_economic"
+                ]
+            )
+        ).sum()
     )
 
     print(
@@ -1048,6 +1406,11 @@ def validate_adjusted_output(
     )
 
     print(
+        f"Pregões: "
+        f"{dataframe['trade_date'].nunique():,}"
+    )
+
+    print(
         f"Duplicidades: "
         f"{duplicate_count:,}"
     )
@@ -1058,13 +1421,13 @@ def validate_adjusted_output(
     )
 
     print(
-        f"close_price_raw inválidos: "
-        f"{invalid_raw:,}"
+        f"Preços RAW inválidos: "
+        f"{invalid_raw_prices:,}"
     )
 
     print(
-        f"close_price_adjusted inválidos: "
-        f"{invalid_adjusted:,}"
+        f"Preços adjusted inválidos: "
+        f"{invalid_adjusted_prices:,}"
     )
 
     print(
@@ -1080,6 +1443,21 @@ def validate_adjusted_output(
     print(
         "Erros de preservação do RAW: "
         f"{raw_preservation_error:,}"
+    )
+
+    print(
+        "daily_return_raw não finitos: "
+        f"{non_finite_raw_return:,}"
+    )
+
+    print(
+        "daily_return_adjusted_price "
+        f"não finitos: {non_finite_adjusted_return:,}"
+    )
+
+    print(
+        "daily_return_economic "
+        f"não finitos: {non_finite_economic_return:,}"
     )
 
     print(
@@ -1103,16 +1481,15 @@ def validate_adjusted_output(
             "obrigatórios nulos."
         )
 
-    if invalid_raw > 0:
+    if invalid_raw_prices > 0:
         raise ValueError(
-            "Saída possui close_price_raw "
-            "inválido."
+            "Saída possui preços RAW inválidos."
         )
 
-    if invalid_adjusted > 0:
+    if invalid_adjusted_prices > 0:
         raise ValueError(
-            "Saída possui "
-            "close_price_adjusted inválido."
+            "Saída possui preços adjusted "
+            "inválidos."
         )
 
     if invalid_factor > 0:
@@ -1128,8 +1505,26 @@ def validate_adjusted_output(
 
     if raw_preservation_error > 0:
         raise ValueError(
-            "close_price_raw não preserva "
-            "exatamente o preço de origem."
+            "Colunas RAW não preservam "
+            "exatamente a Silver."
+        )
+
+    if non_finite_raw_return > 0:
+        raise ValueError(
+            "daily_return_raw possui "
+            "valor não finito."
+        )
+
+    if non_finite_adjusted_return > 0:
+        raise ValueError(
+            "daily_return_adjusted_price possui "
+            "valor não finito."
+        )
+
+    if non_finite_economic_return > 0:
+        raise ValueError(
+            "daily_return_economic possui "
+            "valor não finito."
         )
 
     if (
@@ -1179,18 +1574,14 @@ def validate_split_behavior(
             index=False
         )
     ):
-        ticker_data = dataframe[
+        event_row = dataframe[
             dataframe[
                 "ticker"
             ].eq(
                 action.ticker
             )
-        ].sort_values(
-            "trade_date"
-        )
-
-        event_row = ticker_data[
-            ticker_data[
+            &
+            dataframe[
                 "trade_date"
             ].eq(
                 action.event_date
@@ -1210,12 +1601,12 @@ def validate_split_behavior(
 
         event_row = event_row.iloc[0]
 
-        adjusted_return = event_row[
-            "daily_return_adjusted_price"
-        ]
-
         raw_return = event_row[
             "daily_return_raw"
+        ]
+
+        adjusted_return = event_row[
+            "daily_return_adjusted_price"
         ]
 
         print(
@@ -1361,6 +1752,7 @@ def validate_amortization_behavior(
 def print_summary(
     dataframe: pd.DataFrame,
     confirmed_actions: pd.DataFrame,
+    silver_file_count: int,
 ) -> None:
     structural_rows = int(
         (
@@ -1405,6 +1797,16 @@ def print_summary(
     )
 
     print(
+        "Source: "
+        "SILVER_FII_DAILY_PRICES"
+    )
+
+    print(
+        f"Partições Silver: "
+        f"{silver_file_count:,}"
+    )
+
+    print(
         f"Linhas: "
         f"{len(dataframe):,}"
     )
@@ -1412,6 +1814,11 @@ def print_summary(
     print(
         f"Tickers: "
         f"{dataframe['ticker'].nunique():,}"
+    )
+
+    print(
+        f"Pregões: "
+        f"{dataframe['trade_date'].nunique():,}"
     )
 
     print(
@@ -1463,10 +1870,23 @@ def select_output_columns(
         "ticker",
         "cnpj",
         "codigo_cvm",
+        "instrument_id",
 
+        "open_price_raw",
+        "low_price_raw",
+        "high_price_raw",
+        "average_price_raw",
         "close_price_raw",
+
         "structural_adjustment_factor",
+
+        "open_price_adjusted",
+        "low_price_adjusted",
+        "high_price_adjusted",
+        "average_price_adjusted",
         "close_price_adjusted",
+
+        "trades_quantity",
 
         "cash_flow_per_unit_raw",
         "cash_flow_per_unit_adjusted",
@@ -1492,7 +1912,11 @@ def select_output_columns(
         "confirmed_action_source",
         "confirmed_action_confirmation_date",
 
+        "ticker_resolution_status",
+        "market_evidence_confidence",
+
         "adjusted_prices_version",
+        "adjusted_prices_source",
         "created_at",
     ]
 
@@ -1512,12 +1936,28 @@ def main() -> None:
         f"{ADJUSTED_PRICES_VERSION}"
     )
 
-    price_history = (
-        load_price_history()
+    print(
+        "Source: "
+        "SILVER_FII_DAILY_PRICES"
     )
 
-    validate_price_history(
-        price_history
+    silver_files = (
+        find_all_silver_price_files(
+            SILVER_PRICES_BASE_DIR
+        )
+    )
+
+    print(
+        f"\nPartições Silver encontradas: "
+        f"{len(silver_files):,}"
+    )
+
+    silver_prices = load_silver_prices(
+        silver_files
+    )
+
+    validate_silver_prices(
+        silver_prices
     )
 
     discontinuities = (
@@ -1531,13 +1971,13 @@ def main() -> None:
     )
 
     validate_event_dates(
-        price_history=price_history,
+        silver_prices=silver_prices,
         confirmed_actions=confirmed_actions,
     )
 
     adjusted = (
         build_structural_adjustment_factor(
-            price_history=price_history,
+            silver_prices=silver_prices,
             confirmed_actions=confirmed_actions,
         )
     )
@@ -1592,6 +2032,9 @@ def main() -> None:
     print_summary(
         dataframe=output,
         confirmed_actions=confirmed_actions,
+        silver_file_count=len(
+            silver_files
+        ),
     )
 
     print(
@@ -1599,12 +2042,27 @@ def main() -> None:
     )
 
     print(
-        "close_price_raw foi preservado."
+        "A fonte desta versão é diretamente "
+        "a Silver FII Daily Prices."
     )
 
     print(
-        "SPLIT/REVERSE_SPLIT afetam somente "
-        "a escala estrutural da série."
+        "Nenhuma dependência de "
+        "FII Price History permanece."
+    )
+
+    print(
+        "Preços RAW foram preservados."
+    )
+
+    print(
+        "OHLC/average receberam o mesmo "
+        "ajuste estrutural do close."
+    )
+
+    print(
+        "SPLIT/REVERSE_SPLIT alteram apenas "
+        "a escala estrutural."
     )
 
     print(
@@ -1613,7 +2071,7 @@ def main() -> None:
     )
 
     print(
-        "Eventos PENDING_REVIEW não geram "
+        "Eventos não confirmados não geram "
         "ajuste automático."
     )
 

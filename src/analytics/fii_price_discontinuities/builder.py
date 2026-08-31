@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,13 +10,12 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-PRICE_HISTORY_PATH = (
+
+SILVER_PRICES_BASE_DIR = (
     PROJECT_ROOT
     / "data"
-    / "gold"
-    / "analytics"
-    / "fii_price_history"
-    / "fii_price_history.parquet"
+    / "silver"
+    / "fii_daily_prices"
 )
 
 REVIEW_PATH = (
@@ -39,7 +39,13 @@ OUTPUT_PATH = (
 )
 
 
-DISCONTINUITY_VERSION = "v3"
+DISCONTINUITY_VERSION = "v4"
+DISCONTINUITY_SOURCE = "SILVER_FII_DAILY_PRICES"
+
+
+PARTITION_PATTERN = re.compile(
+    r"year=(\d{4}).*month=(\d{2}).*day=(\d{2})"
+)
 
 
 COMMON_FACTORS = [
@@ -91,26 +97,148 @@ REVIEW_COLUMNS = [
 ]
 
 
-def load_price_history() -> pd.DataFrame:
-    if not PRICE_HISTORY_PATH.exists():
-        raise FileNotFoundError(
-            "FII Price History não encontrado: "
-            f"{PRICE_HISTORY_PATH}"
-        )
+def extract_partition_date(
+    path: Path,
+) -> tuple[int, int, int]:
+    """
+    Extrai YYYY/MM/DD do caminho
+    particionado da Silver.
+    """
 
-    print(
-        "Carregando FII Price History..."
+    match = PARTITION_PATTERN.search(
+        str(path.parent)
     )
 
-    dataframe = pd.read_parquet(
-        PRICE_HISTORY_PATH,
-        columns=[
-            "trade_date",
-            "ticker",
-            "cnpj",
-            "codigo_cvm",
-            "close_price",
-        ],
+    if match is None:
+        raise ValueError(
+            "Não foi possível identificar "
+            f"a data da partição: {path}"
+        )
+
+    return (
+        int(match.group(1)),
+        int(match.group(2)),
+        int(match.group(3)),
+    )
+
+
+def find_all_silver_price_files(
+    base_directory: Path,
+) -> list[Path]:
+    """
+    Localiza todas as partições Silver
+    de FII Daily Prices.
+    """
+
+    files = list(
+        base_directory.rglob(
+            "fii_daily_prices.parquet"
+        )
+    )
+
+    if not files:
+        raise FileNotFoundError(
+            "Nenhuma Silver de preços encontrada "
+            f"em {base_directory}"
+        )
+
+    return sorted(
+        files,
+        key=extract_partition_date,
+    )
+
+
+def validate_silver_partition_schema(
+    dataframe: pd.DataFrame,
+    source_path: Path,
+) -> None:
+    """
+    Valida contrato mínimo usado pelo
+    detector de descontinuidades.
+    """
+
+    required_columns = [
+        "trade_date",
+        "ticker",
+        "cnpj",
+        "codigo_cvm",
+        "close_price",
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"Arquivo {source_path} possui "
+            f"colunas ausentes: {missing_columns}"
+        )
+
+
+def load_silver_prices(
+    silver_files: list[Path],
+) -> pd.DataFrame:
+    """
+    Carrega diretamente as partições
+    Silver.
+
+    O detector não depende mais de
+    FII Price History.
+    """
+
+    dataframes: list[pd.DataFrame] = []
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Carregando Silver FII Daily Prices"
+    )
+    print(
+        "======================================"
+    )
+
+    for index, path in enumerate(
+        silver_files,
+        start=1,
+    ):
+        year, month, day = (
+            extract_partition_date(
+                path
+            )
+        )
+
+        print(
+            f"[{index}/{len(silver_files)}] "
+            f"{year:04d}-{month:02d}-{day:02d}"
+        )
+
+        dataframe = pd.read_parquet(
+            path,
+            columns=[
+                "trade_date",
+                "ticker",
+                "cnpj",
+                "codigo_cvm",
+                "close_price",
+            ],
+        )
+
+        validate_silver_partition_schema(
+            dataframe=dataframe,
+            source_path=path,
+        )
+
+        dataframes.append(
+            dataframe
+        )
+
+    dataframe = pd.concat(
+        dataframes,
+        ignore_index=True,
     )
 
     dataframe[
@@ -119,6 +247,17 @@ def load_price_history() -> pd.DataFrame:
         dataframe[
             "trade_date"
         ]
+    )
+
+    dataframe[
+        "ticker"
+    ] = (
+        dataframe[
+            "ticker"
+        ]
+        .astype("string")
+        .str.strip()
+        .str.upper()
     )
 
     return dataframe
@@ -177,7 +316,7 @@ def validate_source(
         "\n======================================"
     )
     print(
-        "Data Quality - Fonte"
+        "Data Quality - Fonte Silver"
     )
     print(
         "======================================"
@@ -191,6 +330,11 @@ def validate_source(
     print(
         f"Tickers: "
         f"{dataframe['ticker'].nunique():,}"
+    )
+
+    print(
+        f"Pregões: "
+        f"{dataframe['trade_date'].nunique():,}"
     )
 
     print(
@@ -899,6 +1043,9 @@ def build_discontinuities(
                 "discontinuity_version": (
                     DISCONTINUITY_VERSION
                 ),
+                "discontinuity_source": (
+                    DISCONTINUITY_SOURCE
+                ),
                 "created_at": (
                     created_at
                 ),
@@ -907,6 +1054,98 @@ def build_discontinuities(
 
     return pd.DataFrame(
         records
+    )
+
+
+def validate_review_coverage(
+    discontinuities: pd.DataFrame,
+    reviews: pd.DataFrame,
+) -> None:
+    """
+    Garante que toda decisão governada
+    no CSV ainda possui um candidato
+    correspondente produzido pelo detector.
+
+    Evita perda silenciosa de decisões
+    manuais após mudanças de fonte ou regra.
+    """
+
+    if reviews.empty:
+        return
+
+    detected_keys = set(
+        zip(
+            discontinuities[
+                "ticker"
+            ],
+            discontinuities[
+                "event_date"
+            ],
+        )
+    )
+
+    missing_reviews = []
+
+    for row in reviews.itertuples(
+        index=False
+    ):
+        key = (
+            row.ticker,
+            row.event_date,
+        )
+
+        if key not in detected_keys:
+            missing_reviews.append(
+                {
+                    "ticker": (
+                        row.ticker
+                    ),
+                    "event_date": (
+                        row.event_date
+                    ),
+                    "review_status": (
+                        row.review_status
+                    ),
+                    "event_type": (
+                        row.event_type
+                    ),
+                }
+            )
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Governança - Review Coverage"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        f"Reviews cadastrados: "
+        f"{len(reviews):,}"
+    )
+
+    print(
+        "Reviews sem candidato detectado: "
+        f"{len(missing_reviews):,}"
+    )
+
+    if missing_reviews:
+        missing_dataframe = pd.DataFrame(
+            missing_reviews
+        )
+
+        raise ValueError(
+            "Existem decisões governadas "
+            "sem evento correspondente no "
+            "detector:\n"
+            f"{missing_dataframe.to_string(index=False)}"
+        )
+
+    print(
+        "\nCobertura de reviews aprovada."
     )
 
 
@@ -1028,6 +1267,7 @@ def validate_output(
         "event_type",
         "is_confirmed_corporate_action",
         "discontinuity_version",
+        "discontinuity_source",
     ]
 
     if dataframe.empty:
@@ -1086,6 +1326,15 @@ def validate_output(
         ).sum()
     )
 
+    invalid_source = int(
+        (
+            dataframe[
+                "discontinuity_source"
+            ]
+            != DISCONTINUITY_SOURCE
+        ).sum()
+    )
+
     print(
         "\n======================================"
     )
@@ -1121,6 +1370,11 @@ def validate_output(
         f"{flag_mismatch:,}"
     )
 
+    print(
+        "Fonte inválida: "
+        f"{invalid_source:,}"
+    )
+
     if duplicate_count > 0:
         raise ValueError(
             "Eventos duplicados."
@@ -1149,6 +1403,12 @@ def validate_output(
             "inconsistente."
         )
 
+    if invalid_source > 0:
+        raise ValueError(
+            "Discontinuidades possuem "
+            "source inconsistente."
+        )
+
     confirmed = dataframe[
         dataframe[
             "review_status"
@@ -1170,6 +1430,7 @@ def validate_output(
 
 def print_summary(
     dataframe: pd.DataFrame,
+    silver_file_count: int,
 ) -> None:
     print(
         "\n======================================"
@@ -1184,6 +1445,16 @@ def print_summary(
     print(
         f"Version: "
         f"{DISCONTINUITY_VERSION}"
+    )
+
+    print(
+        f"Source: "
+        f"{DISCONTINUITY_SOURCE}"
+    )
+
+    print(
+        f"Partições Silver: "
+        f"{silver_file_count:,}"
     )
 
     print(
@@ -1348,22 +1619,41 @@ def main() -> None:
         f"{DISCONTINUITY_VERSION}"
     )
 
-    dataframe = (
-        load_price_history()
+    print(
+        f"Source: "
+        f"{DISCONTINUITY_SOURCE}"
+    )
+
+    silver_files = (
+        find_all_silver_price_files(
+            SILVER_PRICES_BASE_DIR
+        )
+    )
+
+    print(
+        f"\nPartições Silver encontradas: "
+        f"{len(silver_files):,}"
+    )
+
+    dataframe = load_silver_prices(
+        silver_files
     )
 
     validate_source(
         dataframe
     )
 
-    reviews = (
-        load_reviews()
-    )
+    reviews = load_reviews()
 
     discontinuities = (
         build_discontinuities(
             dataframe
         )
+    )
+
+    validate_review_coverage(
+        discontinuities=discontinuities,
+        reviews=reviews,
     )
 
     discontinuities = apply_reviews(
@@ -1386,7 +1676,10 @@ def main() -> None:
     )
 
     print_summary(
-        discontinuities
+        dataframe=discontinuities,
+        silver_file_count=len(
+            silver_files
+        ),
     )
 
     print(
@@ -1394,8 +1687,23 @@ def main() -> None:
     )
 
     print(
+        "A fonte desta versão é diretamente "
+        "a Silver FII Daily Prices."
+    )
+
+    print(
+        "Nenhuma dependência de "
+        "FII Price History permanece."
+    )
+
+    print(
         "Nenhum evento foi confirmado "
         "automaticamente."
+    )
+
+    print(
+        "Decisões governadas existentes foram "
+        "validadas contra os eventos detectados."
     )
 
     print(
