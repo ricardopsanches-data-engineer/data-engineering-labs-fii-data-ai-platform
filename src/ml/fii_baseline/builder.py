@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(
+        0,
+        str(PROJECT_ROOT),
+    )
+
 
 import numpy as np
 import pandas as pd
@@ -19,8 +30,10 @@ from sklearn.metrics import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from src.ml.common.feature_contract import (
+    get_feature_contract,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 SPLIT_BASE_DIR = (
     PROJECT_ROOT
@@ -48,7 +61,7 @@ TEST_PATH = (
 DEFAULT_RANDOM_STATE = 42
 DEFAULT_RF_ESTIMATORS = 200
 
-BASELINE_VERSION = "v2"
+BASELINE_VERSION = "v3"
 
 
 @dataclass
@@ -58,6 +71,7 @@ class ModelResult:
     rmse: float
     r2: float
     directional_accuracy: float
+    directional_lift: float
 
 
 def load_split(
@@ -129,6 +143,70 @@ def discover_target_column(
     return target_column
 
 
+def validate_target_semantics(
+    dataframe: pd.DataFrame,
+) -> None:
+    """
+    Garante que o baseline está usando
+    o contrato v2 do training dataset.
+    """
+
+    required_columns = [
+        "training_dataset_version",
+        "target_horizon_semantics",
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "Metadata do target ausente: "
+            f"{missing_columns}"
+        )
+
+    versions = (
+        dataframe[
+            "training_dataset_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+
+    if len(versions) != 1:
+        raise ValueError(
+            "Training dataset version "
+            f"ambígua: {versions.tolist()}"
+        )
+
+    semantics = (
+        dataframe[
+            "target_horizon_semantics"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+
+    if len(semantics) != 1:
+        raise ValueError(
+            "Target semantics ambígua: "
+            f"{semantics.tolist()}"
+        )
+
+    if semantics[0] != (
+        "GLOBAL_B3_TRADING_DAYS"
+    ):
+        raise ValueError(
+            "Baseline exige target baseado "
+            "em pregões globais B3."
+        )
+
+
 def validate_split_contract(
     train: pd.DataFrame,
     validation: pd.DataFrame,
@@ -186,112 +264,6 @@ def validate_split_contract(
             )
 
 
-def build_excluded_columns(
-    dataframe: pd.DataFrame,
-    target_column: str,
-) -> set[str]:
-    """
-    Colunas que jamais devem entrar no X.
-    """
-
-    excluded = {
-        "feature_date",
-        "ticker",
-        "cnpj",
-        "codigo_cvm",
-        "feature_ready",
-        "feature_version",
-        "feature_windows",
-        "features_created_at",
-        "training_dataset_created_at",
-        "training_dataset_version",
-        "target_horizon",
-        "target_name",
-        "split_name",
-        "split_version",
-        "validation_start",
-        "test_start",
-        "split_created_at",
-        target_column,
-    }
-
-    for column in dataframe.columns:
-        if column.startswith(
-            "target_"
-        ):
-            excluded.add(
-                column
-            )
-
-    return excluded
-
-
-def discover_feature_columns(
-    dataframe: pd.DataFrame,
-    target_column: str,
-) -> list[str]:
-    """
-    Descobre somente features numéricas
-    elegíveis para o modelo.
-    """
-
-    excluded_columns = (
-        build_excluded_columns(
-            dataframe=dataframe,
-            target_column=target_column,
-        )
-    )
-
-    numeric_columns = (
-        dataframe.select_dtypes(
-            include=[
-                "number",
-                "bool",
-            ]
-        )
-        .columns
-        .tolist()
-    )
-
-    feature_columns = [
-        column
-        for column in numeric_columns
-        if column not in excluded_columns
-    ]
-
-    if not feature_columns:
-        raise ValueError(
-            "Nenhuma feature numérica encontrada."
-        )
-
-    return feature_columns
-
-
-def validate_no_future_columns(
-    feature_columns: list[str],
-) -> None:
-    """
-    Proteção adicional contra leakage.
-    """
-
-    suspicious_columns = [
-        column
-        for column in feature_columns
-        if (
-            column.startswith(
-                "target_"
-            )
-            or "next_" in column
-        )
-    ]
-
-    if suspicious_columns:
-        raise ValueError(
-            "Possível leakage detectado nas "
-            f"features: {suspicious_columns}"
-        )
-
-
 def prepare_xy(
     dataframe: pd.DataFrame,
     feature_columns: list[str],
@@ -323,7 +295,10 @@ def build_models(
     Modelos baseline.
     """
 
-    models: dict[str, object] = {}
+    models: dict[
+        str,
+        object,
+    ] = {}
 
     models[
         "DummyRegressor"
@@ -389,15 +364,50 @@ def build_models(
     return models
 
 
+def calculate_majority_direction_baseline(
+    y_true: pd.Series,
+) -> tuple[
+    float,
+    str,
+]:
+    """
+    Baseline ingênuo para direção.
+    """
+
+    positive_rate = float(
+        (
+            y_true
+            > 0
+        ).mean()
+    )
+
+    non_positive_rate = (
+        1.0
+        - positive_rate
+    )
+
+    if (
+        positive_rate
+        > non_positive_rate
+    ):
+        return (
+            positive_rate,
+            "POSITIVE",
+        )
+
+    return (
+        non_positive_rate,
+        "NON_POSITIVE",
+    )
+
+
 def calculate_directional_accuracy(
     y_true: pd.Series,
     y_pred: np.ndarray,
 ) -> float:
     """
-    Mede se o modelo acertou o sinal
-    do retorno futuro.
-
-    positivo vs não positivo.
+    Mede se o modelo acertou
+    o sinal do retorno.
     """
 
     true_direction = (
@@ -427,7 +437,9 @@ def calculate_directional_accuracy(
 def calculate_metrics(
     y_true: pd.Series,
     y_pred: np.ndarray,
+    majority_direction_accuracy: float,
 ) -> tuple[
+    float,
     float,
     float,
     float,
@@ -462,11 +474,17 @@ def calculate_metrics(
         )
     )
 
+    directional_lift = (
+        directional_accuracy
+        - majority_direction_accuracy
+    )
+
     return (
         float(mae),
         float(rmse),
         float(r2),
         float(directional_accuracy),
+        float(directional_lift),
     )
 
 
@@ -476,6 +494,7 @@ def evaluate_models(
     y_train: pd.Series,
     x_validation: pd.DataFrame,
     y_validation: pd.Series,
+    majority_direction_accuracy: float,
 ) -> list[ModelResult]:
     """
     Treina no TRAIN e avalia somente
@@ -515,9 +534,13 @@ def evaluate_models(
             rmse,
             r2,
             directional_accuracy,
+            directional_lift,
         ) = calculate_metrics(
             y_true=y_validation,
             y_pred=predictions,
+            majority_direction_accuracy=(
+                majority_direction_accuracy
+            ),
         )
 
         results.append(
@@ -526,7 +549,12 @@ def evaluate_models(
                 mae=mae,
                 rmse=rmse,
                 r2=r2,
-                directional_accuracy=directional_accuracy,
+                directional_accuracy=(
+                    directional_accuracy
+                ),
+                directional_lift=(
+                    directional_lift
+                ),
             )
         )
 
@@ -548,9 +576,14 @@ def evaluate_models(
         )
 
         print(
-            f"  Directional Accuracy: "
+            "  Directional Accuracy: "
             f"{directional_accuracy:.4f} "
             f"({directional_accuracy * 100:.2f}%)"
+        )
+
+        print(
+            "  Directional Lift: "
+            f"{directional_lift * 100:+.2f} p.p."
         )
 
     return results
@@ -560,7 +593,7 @@ def results_to_dataframe(
     results: list[ModelResult],
 ) -> pd.DataFrame:
     """
-    Resultado tabular.
+    Converte resultados para DataFrame.
     """
 
     return pd.DataFrame(
@@ -573,38 +606,52 @@ def results_to_dataframe(
                 "directional_accuracy": (
                     result.directional_accuracy
                 ),
+                "directional_lift": (
+                    result.directional_lift
+                ),
             }
             for result in results
         ]
     )
 
 
-def print_feature_summary(
-    feature_columns: list[str],
+def print_feature_contract_summary(
+    version: str,
+    windows: tuple[int, ...],
+    features: tuple[str, ...],
 ) -> None:
     """
-    Mostra as features efetivamente
-    usadas.
+    Mostra o Feature Contract usado.
     """
 
     print(
         "\n======================================"
     )
     print(
-        "Features do baseline"
+        "Feature Contract"
     )
     print(
         "======================================"
     )
 
     print(
-        f"Quantidade: "
-        f"{len(feature_columns):,}"
+        f"Version: "
+        f"{version}"
     )
 
-    for column in feature_columns:
+    print(
+        f"Windows: "
+        f"{windows}"
+    )
+
+    print(
+        f"Features: "
+        f"{len(features):,}"
+    )
+
+    for feature in features:
         print(
-            f"  {column}"
+            f"  {feature}"
         )
 
 
@@ -613,7 +660,7 @@ def print_target_summary(
     y_validation: pd.Series,
 ) -> None:
     """
-    Ajuda a interpretar as métricas.
+    Exibe distribuição do target.
     """
 
     print(
@@ -665,122 +712,134 @@ def print_target_summary(
         )
 
 
+def print_majority_baseline(
+    accuracy: float,
+    direction: str,
+) -> None:
+    """
+    Exibe baseline direcional majoritário.
+    """
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Majority Direction Baseline"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        f"Direção majoritária: "
+        f"{direction}"
+    )
+
+    print(
+        f"Accuracy ingênua: "
+        f"{accuracy * 100:.2f}%"
+    )
+
+
 def print_metric_rankings(
     results: pd.DataFrame,
 ) -> None:
     """
     Exibe rankings separados.
-
-    Não força um único vencedor quando
-    métricas apontam para modelos diferentes.
     """
 
-    print(
-        "\n======================================"
-    )
-    print(
-        "Ranking por MAE"
-    )
-    print(
-        "======================================"
-    )
+    rankings = [
+        (
+            "MAE",
+            "mae",
+            True,
+            "%",
+        ),
+        (
+            "RMSE",
+            "rmse",
+            True,
+            "%",
+        ),
+        (
+            "R²",
+            "r2",
+            False,
+            "r2",
+        ),
+        (
+            "Directional Accuracy",
+            "directional_accuracy",
+            False,
+            "%",
+        ),
+        (
+            "Directional Lift",
+            "directional_lift",
+            False,
+            "pp",
+        ),
+    ]
 
-    mae_ranking = results.sort_values(
-        by="mae",
-        ascending=True,
-    )
+    for (
+        title,
+        column,
+        ascending,
+        display_type,
+    ) in rankings:
 
-    for position, (_, row) in enumerate(
-        mae_ranking.iterrows(),
-        start=1,
-    ):
         print(
-            f"{position}. "
-            f"{row['model']} | "
-            f"{row['mae'] * 100:.4f}%"
+            "\n======================================"
         )
 
-    print(
-        "\n======================================"
-    )
-    print(
-        "Ranking por RMSE"
-    )
-    print(
-        "======================================"
-    )
-
-    rmse_ranking = results.sort_values(
-        by="rmse",
-        ascending=True,
-    )
-
-    for position, (_, row) in enumerate(
-        rmse_ranking.iterrows(),
-        start=1,
-    ):
         print(
-            f"{position}. "
-            f"{row['model']} | "
-            f"{row['rmse'] * 100:.4f}%"
+            f"Ranking por {title}"
         )
 
-    print(
-        "\n======================================"
-    )
-    print(
-        "Ranking por R²"
-    )
-    print(
-        "======================================"
-    )
-
-    r2_ranking = results.sort_values(
-        by="r2",
-        ascending=False,
-    )
-
-    for position, (_, row) in enumerate(
-        r2_ranking.iterrows(),
-        start=1,
-    ):
         print(
-            f"{position}. "
-            f"{row['model']} | "
-            f"{row['r2']:.6f}"
+            "======================================"
         )
 
-    print(
-        "\n======================================"
-    )
-    print(
-        "Ranking por Directional Accuracy"
-    )
-    print(
-        "======================================"
-    )
-
-    direction_ranking = results.sort_values(
-        by="directional_accuracy",
-        ascending=False,
-    )
-
-    for position, (_, row) in enumerate(
-        direction_ranking.iterrows(),
-        start=1,
-    ):
-        print(
-            f"{position}. "
-            f"{row['model']} | "
-            f"{row['directional_accuracy'] * 100:.2f}%"
+        ranking = results.sort_values(
+            by=column,
+            ascending=ascending,
         )
+
+        for position, (_, row) in enumerate(
+            ranking.iterrows(),
+            start=1,
+        ):
+            value = row[
+                column
+            ]
+
+            if display_type == "%":
+                display = (
+                    f"{value * 100:.4f}%"
+                )
+
+            elif display_type == "pp":
+                display = (
+                    f"{value * 100:+.2f} p.p."
+                )
+
+            else:
+                display = (
+                    f"{value:.6f}"
+                )
+
+            print(
+                f"{position}. "
+                f"{row['model']} | "
+                f"{display}"
+            )
 
 
 def print_best_by_metric(
     results: pd.DataFrame,
 ) -> None:
     """
-    Resume o melhor modelo por métrica.
+    Resume melhor modelo por métrica.
     """
 
     best_mae = (
@@ -808,6 +867,14 @@ def print_best_by_metric(
     best_direction = (
         results.sort_values(
             "directional_accuracy",
+            ascending=False,
+        )
+        .iloc[0]
+    )
+
+    best_lift = (
+        results.sort_values(
+            "directional_lift",
             ascending=False,
         )
         .iloc[0]
@@ -842,18 +909,24 @@ def print_best_by_metric(
     )
 
     print(
-        f"Directional Accuracy: "
+        "Directional Accuracy: "
         f"{best_direction['model']} "
         f"({best_direction['directional_accuracy'] * 100:.2f}%)"
+    )
+
+    print(
+        "Directional Lift: "
+        f"{best_lift['model']} "
+        f"({best_lift['directional_lift'] * 100:+.2f} p.p.)"
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Executa modelos baseline "
-            "para previsão de retorno "
-            "futuro de FIIs."
+            "Executa baseline de ML para "
+            "previsão de retorno futuro "
+            "de FIIs."
         )
     )
 
@@ -904,11 +977,13 @@ def main() -> None:
         "validation",
     )
 
-    # Test é carregado apenas para validar
-    # o contrato. Não é usado nas métricas.
     test = load_split(
         TEST_PATH,
         "test",
+    )
+
+    validate_target_semantics(
+        train
     )
 
     target_column = (
@@ -929,19 +1004,26 @@ def main() -> None:
         target_column=target_column,
     )
 
-    feature_columns = (
-        discover_feature_columns(
-            dataframe=train,
-            target_column=target_column,
+    feature_contract = (
+        get_feature_contract(
+            train
         )
     )
 
-    validate_no_future_columns(
-        feature_columns
+    feature_columns = list(
+        feature_contract.features
     )
 
-    print_feature_summary(
-        feature_columns
+    print_feature_contract_summary(
+        version=(
+            feature_contract.version
+        ),
+        windows=(
+            feature_contract.windows
+        ),
+        features=(
+            feature_contract.features
+        ),
     )
 
     x_train, y_train = prepare_xy(
@@ -988,6 +1070,22 @@ def main() -> None:
         y_validation=y_validation,
     )
 
+    (
+        majority_direction_accuracy,
+        majority_direction,
+    ) = calculate_majority_direction_baseline(
+        y_validation
+    )
+
+    print_majority_baseline(
+        accuracy=(
+            majority_direction_accuracy
+        ),
+        direction=(
+            majority_direction
+        ),
+    )
+
     models = build_models(
         random_state=args.random_state,
         rf_estimators=args.rf_estimators,
@@ -999,6 +1097,9 @@ def main() -> None:
         y_train=y_train,
         x_validation=x_validation,
         y_validation=y_validation,
+        majority_direction_accuracy=(
+            majority_direction_accuracy
+        ),
     )
 
     results_dataframe = (
@@ -1026,6 +1127,11 @@ def main() -> None:
     )
 
     print(
+        "Feature Contract: "
+        f"{feature_contract.version}"
+    )
+
+    print(
         "Os modelos foram comparados apenas "
         "no VALIDATION."
     )
@@ -1036,9 +1142,9 @@ def main() -> None:
     )
 
     print(
-        "Não existe um único vencedor "
-        "automático: métricas diferentes "
-        "podem favorecer modelos diferentes."
+        "Directional Lift mede o ganho "
+        "sobre a estratégia ingênua de "
+        "sempre prever a direção majoritária."
     )
 
 
