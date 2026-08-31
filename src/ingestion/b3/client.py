@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 from datetime import date, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
+import zipfile
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -101,9 +103,9 @@ def get_previous_business_day(
     Esta função considera apenas
     sábado e domingo.
 
-    Feriados da B3 são tratados
-    posteriormente pela tentativa
-    de download.
+    Feriados e datas sem pregão da B3
+    são tratados posteriormente pela
+    validação do arquivo.
     """
 
     if reference_date is None:
@@ -166,9 +168,10 @@ def build_local_filename(
     """
     Nome local do RAW.
 
-    Evitamos usar SPRE...zip localmente
-    porque o arquivo baixado é um ZIP
-    externo que contém outro ZIP interno.
+    O arquivo recebido da B3 é um ZIP
+    externo que normalmente contém outro
+    ZIP, por isso usamos um nome próprio
+    para o RAW externo.
     """
 
     return (
@@ -196,24 +199,255 @@ def build_destination_path(
     )
 
 
-def is_valid_zip_response(
+def validate_b3_archive(
     content: bytes,
-) -> bool:
+    trade_date: date,
+) -> tuple[bool, str]:
     """
-    Faz uma validação simples para evitar
-    persistir HTML ou resposta inválida
-    como se fosse ZIP.
+    Valida estruturalmente o arquivo RAW da B3.
 
-    Arquivos ZIP começam normalmente com
-    assinatura PK.
+    Contrato esperado:
+
+        ZIP externo
+            ->
+        SPREYYMMDD.zip
+            ->
+        pelo menos um XML não vazio
+
+    Retorna:
+        (True, mensagem)
+        (False, motivo)
     """
 
     if not content:
-        return False
+        return (
+            False,
+            "arquivo vazio",
+        )
 
-    return content.startswith(
+    if not content.startswith(
         b"PK"
+    ):
+        return (
+            False,
+            "não possui assinatura ZIP PK",
+        )
+
+    expected_inner_zip = (
+        build_b3_filename(
+            trade_date
+        )
     )
+
+    try:
+        outer_buffer = BytesIO(
+            content
+        )
+
+        with zipfile.ZipFile(
+            outer_buffer
+        ) as outer_zip:
+
+            outer_members = [
+                member
+                for member in outer_zip.namelist()
+                if not member.endswith("/")
+            ]
+
+            if not outer_members:
+                return (
+                    False,
+                    "ZIP externo vazio",
+                )
+
+            matching_members = [
+                member
+                for member in outer_members
+                if Path(member).name.lower()
+                == expected_inner_zip.lower()
+            ]
+
+            if not matching_members:
+                return (
+                    False,
+                    (
+                        "ZIP interno esperado "
+                        f"{expected_inner_zip} "
+                        "não encontrado"
+                    ),
+                )
+
+            inner_member = (
+                matching_members[0]
+            )
+
+            inner_content = (
+                outer_zip.read(
+                    inner_member
+                )
+            )
+
+    except (
+        zipfile.BadZipFile,
+        KeyError,
+        OSError,
+    ) as error:
+        return (
+            False,
+            (
+                "ZIP externo inválido: "
+                f"{error}"
+            ),
+        )
+
+    if not inner_content:
+        return (
+            False,
+            "ZIP interno vazio",
+        )
+
+    try:
+        inner_buffer = BytesIO(
+            inner_content
+        )
+
+        with zipfile.ZipFile(
+            inner_buffer
+        ) as inner_zip:
+
+            inner_members = [
+                member
+                for member in inner_zip.namelist()
+                if not member.endswith("/")
+            ]
+
+            if not inner_members:
+                return (
+                    False,
+                    "ZIP interno sem arquivos",
+                )
+
+            xml_members = [
+                member
+                for member in inner_members
+                if member.lower().endswith(
+                    ".xml"
+                )
+            ]
+
+            if not xml_members:
+                return (
+                    False,
+                    "ZIP interno sem XML",
+                )
+
+            non_empty_xml_found = False
+
+            for xml_member in xml_members:
+                info = inner_zip.getinfo(
+                    xml_member
+                )
+
+                if info.file_size > 0:
+                    non_empty_xml_found = True
+                    break
+
+            if not non_empty_xml_found:
+                return (
+                    False,
+                    "XML da B3 vazio",
+                )
+
+    except (
+        zipfile.BadZipFile,
+        KeyError,
+        OSError,
+    ) as error:
+        return (
+            False,
+            (
+                "ZIP interno inválido: "
+                f"{error}"
+            ),
+        )
+
+    return (
+        True,
+        "estrutura B3 válida",
+    )
+
+
+def validate_existing_raw(
+    path: Path,
+    trade_date: date,
+) -> tuple[bool, str]:
+    """
+    Valida um RAW já armazenado localmente.
+    """
+
+    if not path.exists():
+        return (
+            False,
+            "arquivo inexistente",
+        )
+
+    if not path.is_file():
+        return (
+            False,
+            "caminho não é arquivo",
+        )
+
+    try:
+        content = path.read_bytes()
+
+    except OSError as error:
+        return (
+            False,
+            (
+                "erro ao ler RAW: "
+                f"{error}"
+            ),
+        )
+
+    return validate_b3_archive(
+        content=content,
+        trade_date=trade_date,
+    )
+
+
+def remove_invalid_raw(
+    path: Path,
+) -> None:
+    """
+    Remove RAW inválido encontrado
+    durante a validação.
+    """
+
+    try:
+        path.unlink(
+            missing_ok=True
+        )
+
+    except OSError as error:
+        raise RuntimeError(
+            "Não foi possível remover "
+            f"RAW inválido: {path}"
+        ) from error
+
+    # Remove diretórios de partição vazios,
+    # começando pelo day=...
+    parent = path.parent
+
+    while (
+        parent != RAW_BASE_DIR
+        and RAW_BASE_DIR in parent.parents
+    ):
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+
+        parent = parent.parent
 
 
 def download_b3_file(
@@ -222,14 +456,14 @@ def download_b3_file(
     overwrite: bool = False,
 ) -> Path | None:
     """
-    Tenta baixar um pregão específico.
+    Tenta obter um pregão específico.
 
     Retorna:
-        Path -> download válido
-        None -> pregão indisponível
+        Path -> RAW B3 estruturalmente válido
+        None -> pregão indisponível/inválido
 
-    Não derruba o modo em lote quando
-    um dia não possui arquivo válido.
+    Arquivos existentes também são
+    validados antes de serem contabilizados.
     """
 
     destination = (
@@ -252,13 +486,38 @@ def download_b3_file(
         destination.exists()
         and not overwrite
     ):
+        (
+            existing_is_valid,
+            existing_reason,
+        ) = validate_existing_raw(
+            path=destination,
+            trade_date=trade_date,
+        )
+
+        if existing_is_valid:
+            print(
+                f"{trade_date} | "
+                "já existe e é válido | "
+                f"{destination}"
+            )
+
+            return destination
+
         print(
             f"{trade_date} | "
-            f"já existe | "
+            "RAW existente inválido | "
+            f"{existing_reason}"
+        )
+
+        print(
+            f"{trade_date} | "
+            "removendo RAW inválido | "
             f"{destination}"
         )
 
-        return destination
+        remove_invalid_raw(
+            destination
+        )
 
     try:
         response = session.get(
@@ -278,7 +537,7 @@ def download_b3_file(
     if response.status_code == 404:
         print(
             f"{trade_date} | "
-            f"sem pregão"
+            "sem pregão"
         )
 
         return None
@@ -289,7 +548,7 @@ def download_b3_file(
     except requests.HTTPError as error:
         print(
             f"{trade_date} | "
-            f"erro HTTP "
+            "erro HTTP "
             f"{response.status_code} | "
             f"{error}"
         )
@@ -298,12 +557,20 @@ def download_b3_file(
 
     content = response.content
 
-    if not is_valid_zip_response(
-        content
-    ):
+    (
+        is_valid,
+        validation_reason,
+    ) = validate_b3_archive(
+        content=content,
+        trade_date=trade_date,
+    )
+
+    if not is_valid:
         print(
             f"{trade_date} | "
-            f"arquivo inválido ou indisponível"
+            "sem pregão / arquivo inválido | "
+            f"{validation_reason} | "
+            f"{len(content):,} bytes"
         )
 
         return None
@@ -319,7 +586,7 @@ def download_b3_file(
 
     print(
         f"{trade_date} | "
-        f"SUCCESS | "
+        "SUCCESS | "
         f"{requested_filename} | "
         f"{len(content):,} bytes"
     )
@@ -332,8 +599,7 @@ def download_single_date(
     overwrite: bool = False,
 ) -> None:
     """
-    Modo compatível com execução por
-    uma data específica.
+    Modo para uma data específica.
     """
 
     session = create_session()
@@ -349,12 +615,12 @@ def download_single_date(
     )
 
     print(
-        f"Data do pregão: "
+        "Data do pregão: "
         f"{trade_date}"
     )
 
     print(
-        f"Arquivo solicitado à B3: "
+        "Arquivo solicitado à B3: "
         f"{requested_filename}"
     )
 
@@ -370,8 +636,9 @@ def download_single_date(
 
     if result is None:
         raise RuntimeError(
-            f"Não foi possível baixar "
-            f"o pregão {trade_date}."
+            "Não foi possível obter um "
+            "arquivo B3 válido para "
+            f"{trade_date}."
         )
 
     print(
@@ -379,12 +646,12 @@ def download_single_date(
     )
 
     print(
-        f"Arquivo salvo em: "
+        "Arquivo salvo em: "
         f"{result}"
     )
 
     print(
-        f"Tamanho: "
+        "Tamanho: "
         f"{result.stat().st_size:,} bytes"
     )
 
@@ -395,16 +662,21 @@ def download_latest_trading_days(
     overwrite: bool = False,
 ) -> list[Path]:
     """
-    Obtém os N pregões mais recentes.
+    Obtém os N pregões B3 válidos mais recentes.
 
-    A função percorre o calendário para trás
-    e só contabiliza datas cujo arquivo
-    B3 existe ou já está armazenado no RAW.
+    Uma data só é contabilizada quando
+    passa pelo contrato estrutural:
+
+        ZIP externo
+        -> SPREYYMMDD.zip
+        -> XML não vazio
 
     Isso permite lidar naturalmente com:
     - fins de semana;
     - feriados;
-    - datas sem arquivo.
+    - datas sem relatório;
+    - ZIP vazio;
+    - RAW antigo inválido.
     """
 
     if days <= 0:
@@ -424,40 +696,41 @@ def download_latest_trading_days(
 
     session = create_session()
 
-    downloaded_files: list[
+    valid_files: list[
         Path
     ] = []
 
     checked_dates = 0
 
-    # Proteção para impedir loop infinito
-    # em caso de indisponibilidade prolongada.
+    # Folga ampla para finais de semana,
+    # feriados e datas sem arquivo.
     max_dates_to_check = (
         days * 4
         + 30
     )
 
     print(
-        f"Buscando os últimos "
-        f"{days} pregões B3..."
+        "Buscando os últimos "
+        f"{days} pregões B3 válidos..."
     )
 
     print(
-        f"Data inicial da busca: "
+        "Data inicial da busca: "
         f"{candidate_date}"
     )
 
     print()
 
     while (
-        len(downloaded_files)
+        len(valid_files)
         < days
         and checked_dates
         < max_dates_to_check
     ):
         checked_dates += 1
 
-        # Evita requisição aos fins de semana.
+        # Não faz requisição aos
+        # finais de semana.
         if candidate_date.weekday() < 5:
 
             result = download_b3_file(
@@ -467,7 +740,7 @@ def download_latest_trading_days(
             )
 
             if result is not None:
-                downloaded_files.append(
+                valid_files.append(
                     result
                 )
 
@@ -475,15 +748,17 @@ def download_latest_trading_days(
             days=1
         )
 
-    if len(downloaded_files) < days:
+    if len(valid_files) < days:
         raise RuntimeError(
             "Não foi possível encontrar "
-            f"{days} pregões válidos. "
-            f"Encontrados: "
-            f"{len(downloaded_files)}."
+            f"{days} pregões B3 válidos. "
+            "Encontrados: "
+            f"{len(valid_files)}. "
+            "Datas verificadas: "
+            f"{checked_dates}."
         )
 
-    return downloaded_files
+    return valid_files
 
 
 def print_batch_summary(
@@ -491,6 +766,10 @@ def print_batch_summary(
 ) -> None:
     """
     Resumo do modo --days.
+
+    A lista recebida contém somente
+    arquivos que passaram pela validação
+    estrutural B3.
     """
 
     print(
@@ -516,9 +795,20 @@ def print_batch_summary(
         )
 
     print(
-        f"\nPregões disponíveis: "
+        "\nPregões B3 válidos: "
         f"{len(files):,}"
     )
+
+    if files:
+        print(
+            "Primeiro RAW válido: "
+            f"{files[0]}"
+        )
+
+        print(
+            "Último RAW válido: "
+            f"{files[-1]}"
+        )
 
     print(
         "\nDownload B3 "
@@ -529,12 +819,14 @@ def print_batch_summary(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Download do relatório diário "
+            "Download e validação do relatório "
             "Simplified Price Report da B3."
         )
     )
 
-    mode = parser.add_mutually_exclusive_group()
+    mode = (
+        parser.add_mutually_exclusive_group()
+    )
 
     mode.add_argument(
         "--date",
@@ -550,7 +842,7 @@ def main() -> None:
         type=int,
         help=(
             "Busca automaticamente os N "
-            "pregões B3 mais recentes."
+            "pregões B3 válidos mais recentes."
         ),
     )
 
