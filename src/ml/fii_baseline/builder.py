@@ -46,8 +46,9 @@ TEST_PATH = (
 )
 
 DEFAULT_RANDOM_STATE = 42
-
 DEFAULT_RF_ESTIMATORS = 200
+
+BASELINE_VERSION = "v2"
 
 
 @dataclass
@@ -56,6 +57,7 @@ class ModelResult:
     mae: float
     rmse: float
     r2: float
+    directional_accuracy: float
 
 
 def load_split(
@@ -87,8 +89,7 @@ def discover_target_column(
     dataframe: pd.DataFrame,
 ) -> str:
     """
-    Descobre dinamicamente o target
-    contínuo do training dataset.
+    Descobre dinamicamente o target.
     """
 
     if "target_name" not in dataframe.columns:
@@ -191,13 +192,6 @@ def build_excluded_columns(
 ) -> set[str]:
     """
     Colunas que jamais devem entrar no X.
-
-    Inclui:
-    - identidades
-    - datas
-    - metadata
-    - split metadata
-    - target e dados futuros
     """
 
     excluded = {
@@ -278,9 +272,6 @@ def validate_no_future_columns(
 ) -> None:
     """
     Proteção adicional contra leakage.
-
-    Nenhuma coluna que contenha target
-    pode entrar nas features.
     """
 
     suspicious_columns = [
@@ -398,6 +389,41 @@ def build_models(
     return models
 
 
+def calculate_directional_accuracy(
+    y_true: pd.Series,
+    y_pred: np.ndarray,
+) -> float:
+    """
+    Mede se o modelo acertou o sinal
+    do retorno futuro.
+
+    positivo vs não positivo.
+    """
+
+    true_direction = (
+        np.asarray(
+            y_true
+        )
+        > 0
+    )
+
+    predicted_direction = (
+        np.asarray(
+            y_pred
+        )
+        > 0
+    )
+
+    accuracy = (
+        true_direction
+        == predicted_direction
+    ).mean()
+
+    return float(
+        accuracy
+    )
+
+
 def calculate_metrics(
     y_true: pd.Series,
     y_pred: np.ndarray,
@@ -405,9 +431,11 @@ def calculate_metrics(
     float,
     float,
     float,
+    float,
 ]:
     """
-    Calcula métricas de regressão.
+    Calcula métricas de regressão
+    e direção.
     """
 
     mae = mean_absolute_error(
@@ -427,10 +455,18 @@ def calculate_metrics(
         y_pred,
     )
 
+    directional_accuracy = (
+        calculate_directional_accuracy(
+            y_true=y_true,
+            y_pred=y_pred,
+        )
+    )
+
     return (
         float(mae),
         float(rmse),
         float(r2),
+        float(directional_accuracy),
     )
 
 
@@ -442,8 +478,8 @@ def evaluate_models(
     y_validation: pd.Series,
 ) -> list[ModelResult]:
     """
-    Treina no TRAIN e compara
-    somente no VALIDATION.
+    Treina no TRAIN e avalia somente
+    no VALIDATION.
     """
 
     results: list[
@@ -474,11 +510,14 @@ def evaluate_models(
             x_validation
         )
 
-        mae, rmse, r2 = (
-            calculate_metrics(
-                y_true=y_validation,
-                y_pred=predictions,
-            )
+        (
+            mae,
+            rmse,
+            r2,
+            directional_accuracy,
+        ) = calculate_metrics(
+            y_true=y_validation,
+            y_pred=predictions,
         )
 
         results.append(
@@ -487,22 +526,31 @@ def evaluate_models(
                 mae=mae,
                 rmse=rmse,
                 r2=r2,
+                directional_accuracy=directional_accuracy,
             )
         )
 
         print(
             f"  MAE:  "
-            f"{mae:.8f}"
+            f"{mae:.8f} "
+            f"({mae * 100:.4f}%)"
         )
 
         print(
             f"  RMSE: "
-            f"{rmse:.8f}"
+            f"{rmse:.8f} "
+            f"({rmse * 100:.4f}%)"
         )
 
         print(
             f"  R²:   "
             f"{r2:.8f}"
+        )
+
+        print(
+            f"  Directional Accuracy: "
+            f"{directional_accuracy:.4f} "
+            f"({directional_accuracy * 100:.2f}%)"
         )
 
     return results
@@ -515,26 +563,19 @@ def results_to_dataframe(
     Resultado tabular.
     """
 
-    dataframe = pd.DataFrame(
+    return pd.DataFrame(
         [
             {
                 "model": result.name,
                 "mae": result.mae,
                 "rmse": result.rmse,
                 "r2": result.r2,
+                "directional_accuracy": (
+                    result.directional_accuracy
+                ),
             }
             for result in results
         ]
-    )
-
-    return dataframe.sort_values(
-        by=[
-            "mae",
-            "rmse",
-        ],
-        ascending=True,
-    ).reset_index(
-        drop=True
     )
 
 
@@ -543,7 +584,7 @@ def print_feature_summary(
 ) -> None:
     """
     Mostra as features efetivamente
-    utilizadas.
+    usadas.
     """
 
     print(
@@ -567,45 +608,244 @@ def print_feature_summary(
         )
 
 
-def print_model_ranking(
-    results: pd.DataFrame,
+def print_target_summary(
+    y_train: pd.Series,
+    y_validation: pd.Series,
 ) -> None:
     """
-    Ranking no validation.
+    Ajuda a interpretar as métricas.
     """
 
     print(
         "\n======================================"
     )
     print(
-        "Ranking - Validation"
+        "Distribuição do target"
     )
     print(
         "======================================"
     )
 
-    for index, row in (
-        results.iterrows()
+    for name, target in [
+        ("Train", y_train),
+        ("Validation", y_validation),
+    ]:
+        positive_rate = (
+            target
+            > 0
+        ).mean()
+
+        print(
+            f"\n{name}:"
+        )
+
+        print(
+            f"  Média: "
+            f"{target.mean() * 100:.4f}%"
+        )
+
+        print(
+            f"  Mediana: "
+            f"{target.median() * 100:.4f}%"
+        )
+
+        print(
+            f"  Desvio padrão: "
+            f"{target.std() * 100:.4f}%"
+        )
+
+        print(
+            f"  Positivos: "
+            f"{positive_rate * 100:.2f}%"
+        )
+
+        print(
+            f"  Não positivos: "
+            f"{(1 - positive_rate) * 100:.2f}%"
+        )
+
+
+def print_metric_rankings(
+    results: pd.DataFrame,
+) -> None:
+    """
+    Exibe rankings separados.
+
+    Não força um único vencedor quando
+    métricas apontam para modelos diferentes.
+    """
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Ranking por MAE"
+    )
+    print(
+        "======================================"
+    )
+
+    mae_ranking = results.sort_values(
+        by="mae",
+        ascending=True,
+    )
+
+    for position, (_, row) in enumerate(
+        mae_ranking.iterrows(),
+        start=1,
     ):
         print(
-            f"{index + 1}. "
-            f"{row['model']}"
+            f"{position}. "
+            f"{row['model']} | "
+            f"{row['mae'] * 100:.4f}%"
         )
 
+    print(
+        "\n======================================"
+    )
+    print(
+        "Ranking por RMSE"
+    )
+    print(
+        "======================================"
+    )
+
+    rmse_ranking = results.sort_values(
+        by="rmse",
+        ascending=True,
+    )
+
+    for position, (_, row) in enumerate(
+        rmse_ranking.iterrows(),
+        start=1,
+    ):
         print(
-            f"   MAE:  "
-            f"{row['mae']:.8f}"
+            f"{position}. "
+            f"{row['model']} | "
+            f"{row['rmse'] * 100:.4f}%"
         )
 
+    print(
+        "\n======================================"
+    )
+    print(
+        "Ranking por R²"
+    )
+    print(
+        "======================================"
+    )
+
+    r2_ranking = results.sort_values(
+        by="r2",
+        ascending=False,
+    )
+
+    for position, (_, row) in enumerate(
+        r2_ranking.iterrows(),
+        start=1,
+    ):
         print(
-            f"   RMSE: "
-            f"{row['rmse']:.8f}"
+            f"{position}. "
+            f"{row['model']} | "
+            f"{row['r2']:.6f}"
         )
 
+    print(
+        "\n======================================"
+    )
+    print(
+        "Ranking por Directional Accuracy"
+    )
+    print(
+        "======================================"
+    )
+
+    direction_ranking = results.sort_values(
+        by="directional_accuracy",
+        ascending=False,
+    )
+
+    for position, (_, row) in enumerate(
+        direction_ranking.iterrows(),
+        start=1,
+    ):
         print(
-            f"   R²:   "
-            f"{row['r2']:.8f}"
+            f"{position}. "
+            f"{row['model']} | "
+            f"{row['directional_accuracy'] * 100:.2f}%"
         )
+
+
+def print_best_by_metric(
+    results: pd.DataFrame,
+) -> None:
+    """
+    Resume o melhor modelo por métrica.
+    """
+
+    best_mae = (
+        results.sort_values(
+            "mae"
+        )
+        .iloc[0]
+    )
+
+    best_rmse = (
+        results.sort_values(
+            "rmse"
+        )
+        .iloc[0]
+    )
+
+    best_r2 = (
+        results.sort_values(
+            "r2",
+            ascending=False,
+        )
+        .iloc[0]
+    )
+
+    best_direction = (
+        results.sort_values(
+            "directional_accuracy",
+            ascending=False,
+        )
+        .iloc[0]
+    )
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Melhores por métrica"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        f"MAE: "
+        f"{best_mae['model']} "
+        f"({best_mae['mae'] * 100:.4f}%)"
+    )
+
+    print(
+        f"RMSE: "
+        f"{best_rmse['model']} "
+        f"({best_rmse['rmse'] * 100:.4f}%)"
+    )
+
+    print(
+        f"R²: "
+        f"{best_r2['model']} "
+        f"({best_r2['r2']:.6f})"
+    )
+
+    print(
+        f"Directional Accuracy: "
+        f"{best_direction['model']} "
+        f"({best_direction['directional_accuracy'] * 100:.2f}%)"
+    )
 
 
 def main() -> None:
@@ -649,6 +889,11 @@ def main() -> None:
         "Executando FII ML Baseline..."
     )
 
+    print(
+        f"Baseline version: "
+        f"{BASELINE_VERSION}"
+    )
+
     train = load_split(
         TRAIN_PATH,
         "train",
@@ -659,9 +904,8 @@ def main() -> None:
         "validation",
     )
 
-    # O test é carregado apenas para
-    # validar o contrato, mas NÃO será
-    # usado para comparar os modelos.
+    # Test é carregado apenas para validar
+    # o contrato. Não é usado nas métricas.
     test = load_split(
         TEST_PATH,
         "test",
@@ -739,6 +983,11 @@ def main() -> None:
         f"{len(test):,}"
     )
 
+    print_target_summary(
+        y_train=y_train,
+        y_validation=y_validation,
+    )
+
     models = build_models(
         random_state=args.random_state,
         rf_estimators=args.rf_estimators,
@@ -758,39 +1007,38 @@ def main() -> None:
         )
     )
 
-    print_model_ranking(
+    print_metric_rankings(
         results_dataframe
     )
 
-    best_model = (
-        results_dataframe.iloc[0][
-            "model"
-        ]
+    print_best_by_metric(
+        results_dataframe
     )
 
     print(
         "\n======================================"
     )
     print(
-        "Resultado do baseline"
+        "Conclusão do baseline"
     )
     print(
         "======================================"
     )
 
     print(
-        f"Melhor modelo no validation: "
-        f"{best_model}"
+        "Os modelos foram comparados apenas "
+        "no VALIDATION."
     )
 
     print(
-        "\nIMPORTANTE:"
+        "O conjunto TEST continua reservado "
+        "para avaliação final futura."
     )
 
     print(
-        "O conjunto TEST permanece reservado "
-        "e ainda não foi usado para selecionar "
-        "ou avaliar definitivamente o modelo."
+        "Não existe um único vencedor "
+        "automático: métricas diferentes "
+        "podem favorecer modelos diferentes."
     )
 
 
