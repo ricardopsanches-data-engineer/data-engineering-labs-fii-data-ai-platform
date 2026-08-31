@@ -31,23 +31,20 @@ ML_FEATURES_PATH = (
     / "fii_features.parquet"
 )
 
-DEFAULT_WINDOWS = [5, 10]
-
-FEATURE_VERSION = "v3"
+FEATURE_VERSION = "v4"
 
 
 def normalize_windows(
     windows: list[int],
 ) -> list[int]:
     """
-    Valida, remove duplicidades e ordena
-    as janelas temporais.
+    Valida, remove duplicidades
+    e ordena as janelas.
     """
 
     if not windows:
         raise ValueError(
-            "Pelo menos uma janela temporal "
-            "deve ser informada."
+            "Nenhuma janela temporal informada."
         )
 
     if any(
@@ -64,12 +61,105 @@ def normalize_windows(
     )
 
 
+def parse_feature_windows_value(
+    value: object,
+) -> list[int]:
+    """
+    Converte o metadata feature_windows
+    salvo pela Gold Analytics.
+
+    Exemplo:
+        "5,10"
+        ->
+        [5, 10]
+    """
+
+    if value is None:
+        raise ValueError(
+            "feature_windows ausente "
+            "na Gold Analytics."
+        )
+
+    text = str(
+        value
+    ).strip()
+
+    if not text:
+        raise ValueError(
+            "feature_windows vazio "
+            "na Gold Analytics."
+        )
+
+    try:
+        windows = [
+            int(part.strip())
+            for part in text.split(",")
+            if part.strip()
+        ]
+
+    except ValueError as error:
+        raise ValueError(
+            "feature_windows inválido "
+            f"na Gold Analytics: {value}"
+        ) from error
+
+    return normalize_windows(
+        windows
+    )
+
+
+def discover_windows_from_history(
+    dataframe: pd.DataFrame,
+) -> list[int]:
+    """
+    Descobre automaticamente as janelas
+    utilizadas pela Gold Analytics.
+    """
+
+    if (
+        "feature_windows"
+        not in dataframe.columns
+    ):
+        raise ValueError(
+            "A Gold Analytics não possui "
+            "a coluna feature_windows. "
+            "Reconstrua o histórico com "
+            "o builder dinâmico."
+        )
+
+    values = (
+        dataframe[
+            "feature_windows"
+        ]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .unique()
+    )
+
+    if len(values) == 0:
+        raise ValueError(
+            "Nenhum feature_windows válido "
+            "encontrado na Gold Analytics."
+        )
+
+    if len(values) > 1:
+        raise ValueError(
+            "Gold Analytics contém mais de "
+            "uma configuração feature_windows: "
+            f"{values.tolist()}"
+        )
+
+    return parse_feature_windows_value(
+        values[0]
+    )
+
+
 def build_window_feature_columns(
     window: int,
 ) -> list[str]:
     """
-    Retorna as features obrigatórias
-    de uma determinada janela temporal.
+    Features geradas para uma janela.
     """
 
     return [
@@ -87,8 +177,8 @@ def build_dynamic_feature_columns(
     windows: list[int],
 ) -> list[str]:
     """
-    Constrói dinamicamente a lista
-    completa de features.
+    Lista completa das features
+    temporais solicitadas.
     """
 
     columns = [
@@ -108,12 +198,9 @@ def build_dynamic_feature_columns(
 
 def load_price_history(
     path: Path,
-    windows: list[int],
 ) -> pd.DataFrame:
     """
-    Carrega o histórico Gold Analytics
-    e valida se as features solicitadas
-    existem.
+    Carrega a Gold Analytics.
     """
 
     if not path.exists():
@@ -130,43 +217,6 @@ def load_price_history(
         path
     )
 
-    base_required_columns = [
-        "trade_date",
-        "ticker",
-        "cnpj",
-        "codigo_cvm",
-        "close_price",
-        "trades_quantity",
-        "daily_return",
-        "daily_return_pct",
-        "observations_count",
-    ]
-
-    dynamic_required_columns = (
-        build_dynamic_feature_columns(
-            windows
-        )
-    )
-
-    required_columns = (
-        base_required_columns
-        + dynamic_required_columns
-    )
-
-    missing_columns = [
-        column
-        for column in required_columns
-        if column not in dataframe.columns
-    ]
-
-    if missing_columns:
-        raise ValueError(
-            "Colunas obrigatórias ausentes "
-            f"no histórico: {missing_columns}. "
-            "Verifique se a Gold Analytics foi "
-            "gerada com as mesmas --windows."
-        )
-
     dataframe[
         "trade_date"
     ] = pd.to_datetime(
@@ -178,17 +228,129 @@ def load_price_history(
     return dataframe
 
 
+def validate_history_contract(
+    dataframe: pd.DataFrame,
+    windows: list[int],
+) -> None:
+    """
+    Valida se a Gold Analytics contém
+    todas as colunas necessárias.
+    """
+
+    base_required_columns = [
+        "trade_date",
+        "ticker",
+        "cnpj",
+        "codigo_cvm",
+        "close_price",
+        "trades_quantity",
+        "daily_return",
+        "daily_return_pct",
+        "observations_count",
+        "feature_windows",
+    ]
+
+    dynamic_required_columns = (
+        build_dynamic_feature_columns(
+            windows
+        )
+    )
+
+    required_columns = list(
+        dict.fromkeys(
+            base_required_columns
+            + dynamic_required_columns
+        )
+    )
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "Colunas obrigatórias ausentes "
+            f"na Gold Analytics: "
+            f"{missing_columns}"
+        )
+
+
+def resolve_windows(
+    dataframe: pd.DataFrame,
+    override_windows: list[int] | None,
+) -> list[int]:
+    """
+    Resolve janelas.
+
+    Prioridade:
+    1. --windows explícito
+    2. feature_windows da Gold Analytics
+    """
+
+    discovered_windows = (
+        discover_windows_from_history(
+            dataframe
+        )
+    )
+
+    if override_windows is None:
+        print(
+            "Janelas herdadas da "
+            f"Gold Analytics: "
+            f"{discovered_windows}"
+        )
+
+        return discovered_windows
+
+    override_windows = (
+        normalize_windows(
+            override_windows
+        )
+    )
+
+    print(
+        f"Janelas da Gold Analytics: "
+        f"{discovered_windows}"
+    )
+
+    print(
+        f"Override solicitado: "
+        f"{override_windows}"
+    )
+
+    # -----------------------------------------
+    # O override só pode usar janelas
+    # realmente disponíveis no histórico.
+    # -----------------------------------------
+
+    unavailable_windows = [
+        window
+        for window in override_windows
+        if window
+        not in discovered_windows
+    ]
+
+    if unavailable_windows:
+        raise ValueError(
+            "Override solicita janelas "
+            "não disponíveis na "
+            "Gold Analytics: "
+            f"{unavailable_windows}. "
+            f"Disponíveis: "
+            f"{discovered_windows}"
+        )
+
+    return override_windows
+
+
 def build_ml_features(
     history: pd.DataFrame,
     windows: list[int],
 ) -> pd.DataFrame:
     """
-    Constrói dataset de features ML
-    dinamicamente.
-
-    Todas as features utilizam somente
-    informações disponíveis até a
-    feature_date.
+    Constrói dataset ML dinamicamente.
     """
 
     base_columns = [
@@ -209,13 +371,11 @@ def build_ml_features(
         )
     )
 
-    columns = (
-        base_columns
-        + [
-            column
-            for column in dynamic_columns
-            if column not in base_columns
-        ]
+    columns = list(
+        dict.fromkeys(
+            base_columns
+            + dynamic_columns
+        )
     )
 
     features = history[
@@ -228,20 +388,13 @@ def build_ml_features(
         }
     )
 
-    # -----------------------------------------
-    # Feature readiness dinâmica
-    #
-    # Começamos assumindo True.
-    # Cada janela adiciona suas condições.
-    # -----------------------------------------
-
     ready_mask = pd.Series(
         True,
         index=features.index,
         dtype=bool,
     )
 
-    # Retorno diário também é obrigatório.
+    # Retorno diário obrigatório.
     ready_mask &= (
         features[
             "daily_return"
@@ -336,10 +489,6 @@ def validate_ml_features(
         f"{immature_count:,}"
     )
 
-    # -----------------------------------------
-    # Identidade
-    # -----------------------------------------
-
     required_identity_columns = [
         "feature_date",
         "ticker",
@@ -374,10 +523,6 @@ def validate_ml_features(
             "de identidade nulos."
         )
 
-    # -----------------------------------------
-    # Granularidade
-    # -----------------------------------------
-
     duplicate_mask = dataframe.duplicated(
         subset=[
             "feature_date",
@@ -401,10 +546,6 @@ def validate_ml_features(
             "Dataset ML contém duplicidade "
             "na granularidade de features."
         )
-
-    # -----------------------------------------
-    # Linhas prontas
-    # -----------------------------------------
 
     ready = dataframe[
         dataframe[
@@ -464,10 +605,6 @@ def validate_ml_features(
             "features obrigatórias nulas."
         )
 
-    # -----------------------------------------
-    # Validação estrutural por janela
-    # -----------------------------------------
-
     for window in windows:
 
         minimum_observations = (
@@ -500,8 +637,7 @@ def add_metadata(
     windows: list[int],
 ) -> pd.DataFrame:
     """
-    Adiciona metadados técnicos
-    e de configuração.
+    Adiciona metadados técnicos.
     """
 
     result = dataframe.copy()
@@ -531,7 +667,7 @@ def save_features(
     destination: Path,
 ) -> None:
     """
-    Persiste dataset de features.
+    Persiste Gold ML.
     """
 
     destination.parent.mkdir(
@@ -550,7 +686,7 @@ def print_summary(
     windows: list[int],
 ) -> None:
     """
-    Exibe resumo final.
+    Resumo final.
     """
 
     ready = dataframe[
@@ -644,39 +780,39 @@ def main() -> None:
         "--windows",
         nargs="+",
         type=int,
-        default=DEFAULT_WINDOWS,
+        default=None,
         help=(
-            "Janelas temporais em pregões. "
-            "Devem ser iguais às utilizadas "
-            "na Gold Analytics. "
-            "Exemplo: --windows 5 10"
+            "Override opcional das janelas. "
+            "Quando omitido, as janelas são "
+            "herdadas automaticamente da "
+            "Gold Analytics."
         ),
     )
 
     args = parser.parse_args()
-
-    windows = normalize_windows(
-        args.windows
-    )
 
     print(
         "Construindo Gold ML "
         "FII Features..."
     )
 
-    print(
-        f"Janelas temporais: "
-        f"{windows}"
-    )
-
     history = load_price_history(
-        path=PRICE_HISTORY_PATH,
-        windows=windows,
+        PRICE_HISTORY_PATH
     )
 
     print(
         f"\nHistórico carregado: "
         f"{len(history):,} linhas"
+    )
+
+    windows = resolve_windows(
+        dataframe=history,
+        override_windows=args.windows,
+    )
+
+    validate_history_contract(
+        dataframe=history,
+        windows=windows,
     )
 
     features = build_ml_features(
