@@ -1,5 +1,9 @@
 ticker,event_date,review_status,event_type,quantity_multiplier,price_adjustment_factor,cash_amount_per_unit,confirmation_source,confirmation_date,review_notes
-TEPP11,2025-11-28,CONFIRMED,SPLIT,10,0.1,,ClubeFII comunicado 1045778 / evidencias convergentes,2025-11-24,Desdobramento 1:10; data-base 27/11/2025; negociacao ajustada em 28/11/2025
-VVRI11,2026-07-16,CONFIRMED,SPLIT,10,0.1,,ClubeFII comunicado 1244312 / espelho de comunicado do fundo,2026-07-10,Desdobramento 1:10; data-base 15/07/2026; negociacao ajustada em 16/07/2026
-RDLI11,2026-07-09,CONFIRMED,AMORTIZATION,,,39.497077476,FNET documento 1242229,2026-07-08,Amortizacao parcial; data-base 08/07/2026; impacto de preco observado no pregao seguinte
-SJAU11,2026-03-24,CONFIRMED,REVERSE_SPLIT,0.1,10,,B3 Plantao de Noticias - Alteracoes para o pregao de 24/03/2026,2026-03-24,Grupamento 10:1 confirmado pela B3; cotas ex-grupamento a partir de 24/03/2026
+TEPP11,2025-11-28,CONFIRMED,SPLIT,10,0.1,,ClubeFII comunicado 1045778 / evidencias convergentes,2025-11-24,"Desdobramento 1:10; data-base 27/11/2025; negociacao ajustada em 28/11/2025"
+VVRI11,2026-07-16,CONFIRMED,SPLIT,10,0.1,,ClubeFII comunicado 1244312 / espelho de comunicado do fundo,2026-07-10,"Desdobramento 1:10; data-base 15/07/2026; negociacao ajustada em 16/07/2026"
+RDLI11,2026-07-09,CONFIRMED,AMORTIZATION,,,39.497077476,FNET documento 1242229,2026-07-08,"Amortizacao parcial; data-base 08/07/2026; impacto de preco observado no pregao seguinte"
+SJAU11,2026-03-24,CONFIRMED,REVERSE_SPLIT,0.1,10,,B3 Plantao de Noticias - Alteracoes para o pregao de 24/03/2026,2026-03-24,"Grupamento 10:1 confirmado pela B3; cotas ex-grupamento a partir de 24/03/2026"
+ZAVI11,2025-12-11,CONFIRMED,SPLIT,10,0.1,,StatusInvest / historical corporate action evidence,2025-12-02,"Desdobramento 1:10; data COM 10/12/2025; primeiro pregao em nova escala em 11/12/2025"
+CARE11,2026-02-10,CONFIRMED,REVERSE_SPLIT,0.2,5,,AGE CARE11 / ClubeFII mirror,2026-02-03,"Grupamento 5:1 aprovado em AGE; prazo para ajuste de posicoes ate 09/02/2026"
+HDEL11,2026-04-09,CONFIRMED,AMORTIZATION,,,76.5,StatusInvest / provento estruturado,2026-04-07,"Amortizacao de R$ 76,50 por cota; data COM 07/04/2026; primeiro pregao posterior em 09/04/2026"
+PNDL11,2026-05-18,CONFIRMED,AMORTIZATION,,,436.49363966,StatusInvest / fato relevante repercutido por Suno e Funds Explorer,2026-05-11,"Amortizacao parcial de R$ 436,49363966 por cota; data-base 11/05/2026; primeiro negocio posterior relevante em 18/05/2026"
