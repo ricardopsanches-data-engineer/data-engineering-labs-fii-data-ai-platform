@@ -39,9 +39,6 @@ def extract_partition_date(
 ) -> tuple[int, int, int]:
     """
     Extrai YYYY/MM/DD do caminho particionado.
-
-    Exemplo:
-        year=2026/month=08/day=27/
     """
 
     match = PARTITION_PATTERN.search(
@@ -128,8 +125,7 @@ def load_price_history(
     silver_files: list[Path],
 ) -> pd.DataFrame:
     """
-    Lê e concatena todas as partições
-    Silver encontradas.
+    Lê e concatena todas as partições Silver.
     """
 
     dataframes: list[pd.DataFrame] = []
@@ -203,8 +199,7 @@ def validate_base_history(
     dataframe: pd.DataFrame,
 ) -> None:
     """
-    Valida a série consolidada antes
-    do cálculo das métricas.
+    Valida histórico consolidado.
     """
 
     print(
@@ -250,37 +245,6 @@ def validate_base_history(
     )
 
     if duplicate_count > 0:
-        duplicates = (
-            dataframe[
-                duplicate_mask
-            ][
-                [
-                    "trade_date",
-                    "ticker",
-                    "cnpj",
-                    "close_price",
-                ]
-            ]
-            .sort_values(
-                by=[
-                    "ticker",
-                    "trade_date",
-                ]
-            )
-        )
-
-        print(
-            "\nDuplicidades encontradas:"
-        )
-
-        print(
-            duplicates.head(
-                50
-            ).to_string(
-                index=False
-            )
-        )
-
         raise ValueError(
             "Histórico contém duplicidade "
             "ticker + trade_date."
@@ -326,10 +290,6 @@ def calculate_time_series_features(
 ) -> pd.DataFrame:
     """
     Calcula features temporais por ticker.
-
-    As features dependem apenas de dados
-    presentes ou passados dentro de cada
-    série do ticker.
     """
 
     result = dataframe.copy()
@@ -370,6 +330,32 @@ def calculate_time_series_features(
     )
 
     # -----------------------------------------
+    # Retorno acumulado de 5 pregões
+    #
+    # close_t / close_t-5 - 1
+    #
+    # Precisa de 6 preços.
+    # -----------------------------------------
+
+    result[
+        "return_5d"
+    ] = grouped[
+        "close_price"
+    ].pct_change(
+        periods=5,
+        fill_method=None,
+    )
+
+    result[
+        "return_5d_pct"
+    ] = (
+        result[
+            "return_5d"
+        ]
+        * 100
+    )
+
+    # -----------------------------------------
     # Média móvel 5 pregões
     # -----------------------------------------
 
@@ -393,14 +379,15 @@ def calculate_time_series_features(
     # -----------------------------------------
     # Volatilidade 5 pregões
     #
-    # desvio padrão dos retornos diários
-    # observados na janela.
+    # 5 retornos diários dentro da janela.
     # -----------------------------------------
 
     result[
         "volatility_5d"
     ] = (
-        grouped[
+        result.groupby(
+            "ticker"
+        )[
             "daily_return"
         ]
         .rolling(
@@ -425,7 +412,8 @@ def calculate_time_series_features(
 
     # -----------------------------------------
     # Liquidez proxy:
-    # média de negócios nos últimos 5 pregões
+    # média de quantidade de negócios
+    # em 5 pregões.
     # -----------------------------------------
 
     result[
@@ -446,7 +434,7 @@ def calculate_time_series_features(
     )
 
     # -----------------------------------------
-    # Relação preço / média móvel
+    # Preço relativo à MA5
     # -----------------------------------------
 
     result[
@@ -467,11 +455,8 @@ def calculate_observation_count(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Adiciona número acumulado de observações
+    Número acumulado de observações
     disponíveis por ticker.
-
-    Isso será útil para ML e para sabermos
-    quando uma feature está madura.
     """
 
     result = dataframe.copy()
@@ -493,7 +478,7 @@ def select_gold_columns(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Define contrato da Gold histórica.
+    Contrato da Gold histórica.
     """
 
     columns = [
@@ -510,6 +495,8 @@ def select_gold_columns(
         "trades_quantity",
         "daily_return",
         "daily_return_pct",
+        "return_5d",
+        "return_5d_pct",
         "ma_5",
         "volatility_5d",
         "volatility_5d_pct",
@@ -537,10 +524,7 @@ def validate_calculated_history(
     dataframe: pd.DataFrame,
 ) -> None:
     """
-    Valida o resultado das features.
-
-    NaNs de rolling são esperados quando
-    ainda não existe histórico suficiente.
+    Valida disponibilidade das features.
     """
 
     print(
@@ -558,57 +542,31 @@ def validate_calculated_history(
         f"{len(dataframe):,}"
     )
 
-    daily_return_available = (
-        dataframe[
-            "daily_return"
-        ]
-        .notna()
-        .sum()
-    )
+    feature_columns = [
+        "daily_return",
+        "return_5d",
+        "ma_5",
+        "volatility_5d",
+        "trades_avg_5d",
+    ]
 
-    ma5_available = (
-        dataframe[
-            "ma_5"
-        ]
-        .notna()
-        .sum()
-    )
+    for column in feature_columns:
+        available = (
+            dataframe[
+                column
+            ]
+            .notna()
+            .sum()
+        )
 
-    volatility_available = (
-        dataframe[
-            "volatility_5d"
-        ]
-        .notna()
-        .sum()
-    )
+        print(
+            f"{column} disponível: "
+            f"{available:,}"
+        )
 
-    liquidity_available = (
-        dataframe[
-            "trades_avg_5d"
-        ]
-        .notna()
-        .sum()
-    )
-
-    print(
-        f"daily_return disponível: "
-        f"{daily_return_available:,}"
-    )
-
-    print(
-        f"ma_5 disponível: "
-        f"{ma5_available:,}"
-    )
-
-    print(
-        f"volatility_5d disponível: "
-        f"{volatility_available:,}"
-    )
-
-    print(
-        f"trades_avg_5d disponível: "
-        f"{liquidity_available:,}"
-    )
+    # -----------------------------------------
+    # Consistência estrutural
+    # -----------------------------------------
 
     invalid_observation_count = (
         dataframe[
@@ -620,6 +578,54 @@ def validate_calculated_history(
     if invalid_observation_count > 0:
         raise ValueError(
             "observations_count inválido."
+        )
+
+    # -----------------------------------------
+    # return_5d não pode existir antes da
+    # sexta observação.
+    # -----------------------------------------
+
+    invalid_return_5d = dataframe[
+        (
+            dataframe[
+                "observations_count"
+            ]
+            < 6
+        )
+        &
+        dataframe[
+            "return_5d"
+        ].notna()
+    ]
+
+    if not invalid_return_5d.empty:
+        raise ValueError(
+            "return_5d encontrado antes "
+            "da sexta observação."
+        )
+
+    # -----------------------------------------
+    # volatility_5d também exige cinco
+    # retornos, portanto pelo menos 6 preços.
+    # -----------------------------------------
+
+    invalid_volatility = dataframe[
+        (
+            dataframe[
+                "observations_count"
+            ]
+            < 6
+        )
+        &
+        dataframe[
+            "volatility_5d"
+        ].notna()
+    ]
+
+    if not invalid_volatility.empty:
+        raise ValueError(
+            "volatility_5d encontrada antes "
+            "da sexta observação."
         )
 
     print(
@@ -650,7 +656,7 @@ def print_history_summary(
     dataframe: pd.DataFrame,
 ) -> None:
     """
-    Exibe resumo da série construída.
+    Resumo final.
     """
 
     min_date = (
@@ -715,6 +721,16 @@ def print_history_summary(
         f"Tickers presentes em todos "
         f"os pregões: "
         f"{(observations == dataframe['trade_date'].nunique()).sum():,}"
+    )
+
+    print(
+        f"Linhas com return_5d: "
+        f"{dataframe['return_5d'].notna().sum():,}"
+    )
+
+    print(
+        f"Linhas com volatility_5d: "
+        f"{dataframe['volatility_5d'].notna().sum():,}"
     )
 
 
