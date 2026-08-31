@@ -11,6 +11,10 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
+# ============================================================
+# Paths
+# ============================================================
+
 SILVER_PRICES_BASE_DIR = (
     PROJECT_ROOT
     / "data"
@@ -39,9 +43,20 @@ OUTPUT_PATH = (
 )
 
 
-DISCONTINUITY_VERSION = "v4"
-DISCONTINUITY_SOURCE = "SILVER_FII_DAILY_PRICES"
+# ============================================================
+# Version / source
+# ============================================================
 
+DISCONTINUITY_VERSION = "v5"
+
+DISCONTINUITY_SOURCE = (
+    "SILVER_FII_DAILY_PRICES"
+)
+
+
+# ============================================================
+# Detection policy
+# ============================================================
 
 PARTITION_PATTERN = re.compile(
     r"year=(\d{4}).*month=(\d{2}).*day=(\d{2})"
@@ -61,10 +76,45 @@ COMMON_FACTORS = [
     20.00,
 ]
 
+
 FACTOR_TOLERANCE = 0.10
 
-MIN_ABSOLUTE_DAILY_RETURN = 0.50
 
+# v4:
+#     50%
+#
+# v5:
+#     30%
+#
+# O threshold agora significa:
+#
+#     "merece revisão"
+#
+# e NÃO:
+#
+#     "é corporate action"
+#
+MIN_CANDIDATE_ABSOLUTE_DAILY_RETURN = 0.30
+
+
+# Mantido apenas para diagnóstico
+# comparativo com a política anterior.
+LEGACY_V4_THRESHOLD = 0.50
+
+
+DETECTION_POLICY = (
+    "ABS_DAILY_RETURN_GTE_30_PERCENT"
+)
+
+
+REVIEW_POLICY = (
+    "ALL_DETECTED_CANDIDATES_REQUIRE_REVIEW"
+)
+
+
+# ============================================================
+# Governance contract
+# ============================================================
 
 VALID_REVIEW_STATUSES = {
     "PENDING_REVIEW",
@@ -97,6 +147,10 @@ REVIEW_COLUMNS = [
 ]
 
 
+# ============================================================
+# Silver discovery
+# ============================================================
+
 def extract_partition_date(
     path: Path,
 ) -> tuple[int, int, int]:
@@ -106,19 +160,28 @@ def extract_partition_date(
     """
 
     match = PARTITION_PATTERN.search(
-        str(path.parent)
+        str(
+            path.parent
+        )
     )
 
     if match is None:
         raise ValueError(
             "Não foi possível identificar "
-            f"a data da partição: {path}"
+            "a data da partição: "
+            f"{path}"
         )
 
     return (
-        int(match.group(1)),
-        int(match.group(2)),
-        int(match.group(3)),
+        int(
+            match.group(1)
+        ),
+        int(
+            match.group(2)
+        ),
+        int(
+            match.group(3)
+        ),
     )
 
 
@@ -138,8 +201,9 @@ def find_all_silver_price_files(
 
     if not files:
         raise FileNotFoundError(
-            "Nenhuma Silver de preços encontrada "
-            f"em {base_directory}"
+            "Nenhuma Silver de preços "
+            "encontrada em "
+            f"{base_directory}"
         )
 
     return sorted(
@@ -148,13 +212,17 @@ def find_all_silver_price_files(
     )
 
 
+# ============================================================
+# Silver loading / validation
+# ============================================================
+
 def validate_silver_partition_schema(
     dataframe: pd.DataFrame,
     source_path: Path,
 ) -> None:
     """
-    Valida contrato mínimo usado pelo
-    detector de descontinuidades.
+    Valida contrato mínimo da partição
+    usada pelo detector.
     """
 
     required_columns = [
@@ -174,7 +242,8 @@ def validate_silver_partition_schema(
     if missing_columns:
         raise ValueError(
             f"Arquivo {source_path} possui "
-            f"colunas ausentes: {missing_columns}"
+            "colunas ausentes: "
+            f"{missing_columns}"
         )
 
 
@@ -185,11 +254,13 @@ def load_silver_prices(
     Carrega diretamente as partições
     Silver.
 
-    O detector não depende mais de
-    FII Price History.
+    O detector continua independente
+    de Price History e das camadas Gold.
     """
 
-    dataframes: list[pd.DataFrame] = []
+    dataframes: list[
+        pd.DataFrame
+    ] = []
 
     print(
         "\n======================================"
@@ -205,15 +276,19 @@ def load_silver_prices(
         silver_files,
         start=1,
     ):
-        year, month, day = (
-            extract_partition_date(
-                path
-            )
+        (
+            year,
+            month,
+            day,
+        ) = extract_partition_date(
+            path
         )
 
         print(
             f"[{index}/{len(silver_files)}] "
-            f"{year:04d}-{month:02d}-{day:02d}"
+            f"{year:04d}-"
+            f"{month:02d}-"
+            f"{day:02d}"
         )
 
         dataframe = pd.read_parquet(
@@ -266,6 +341,10 @@ def load_silver_prices(
 def validate_source(
     dataframe: pd.DataFrame,
 ) -> None:
+    """
+    Valida a fonte Silver consolidada.
+    """
+
     required_columns = [
         "trade_date",
         "ticker",
@@ -312,6 +391,20 @@ def validate_source(
         ).sum()
     )
 
+    non_finite_prices = int(
+        (
+            dataframe[
+                "close_price"
+            ].notna()
+            &
+            ~np.isfinite(
+                dataframe[
+                    "close_price"
+                ]
+            )
+        ).sum()
+    )
+
     print(
         "\n======================================"
     )
@@ -348,6 +441,11 @@ def validate_source(
     )
 
     print(
+        f"Preços não finitos: "
+        f"{non_finite_prices:,}"
+    )
+
+    print(
         "\nNulos:"
     )
 
@@ -367,6 +465,11 @@ def validate_source(
             "Fonte possui preços inválidos."
         )
 
+    if non_finite_prices > 0:
+        raise ValueError(
+            "Fonte possui preços não finitos."
+        )
+
     if int(
         null_counts.sum()
     ) > 0:
@@ -380,17 +483,22 @@ def validate_source(
     )
 
 
+# ============================================================
+# Review registry
+# ============================================================
+
 def load_reviews() -> pd.DataFrame:
     """
-    Carrega decisões auditadas.
+    Carrega decisões humanas/governadas.
 
-    Nenhum corporate action é confirmado
-    automaticamente pelo detector.
+    O detector nunca transforma candidato
+    automaticamente em corporate action.
     """
 
     if not REVIEW_PATH.exists():
         print(
-            "\nArquivo de reviews não encontrado."
+            "\nArquivo de reviews "
+            "não encontrado."
         )
 
         return pd.DataFrame(
@@ -530,6 +638,10 @@ def load_reviews() -> pd.DataFrame:
 def validate_reviews(
     reviews: pd.DataFrame,
 ) -> None:
+    """
+    Valida o registro governado.
+    """
+
     if reviews.empty:
         return
 
@@ -617,10 +729,13 @@ def validate_reviews(
     if confirmed.empty:
         return
 
-    invalid_unknown = confirmed[
-        "event_type"
-    ].eq(
-        "UNKNOWN"
+    invalid_unknown = (
+        confirmed[
+            "event_type"
+        ]
+        .eq(
+            "UNKNOWN"
+        )
     )
 
     if invalid_unknown.any():
@@ -758,37 +873,18 @@ def validate_reviews(
             )
 
 
-def nearest_common_factor(
-    factor: float,
-) -> tuple[
-    float,
-    float,
-]:
-    nearest = min(
-        COMMON_FACTORS,
-        key=lambda candidate: abs(
-            factor
-            - candidate
-        ),
-    )
-
-    relative_error = (
-        abs(
-            factor
-            - nearest
-        )
-        / nearest
-    )
-
-    return (
-        float(nearest),
-        float(relative_error),
-    )
-
+# ============================================================
+# Price movement calculation
+# ============================================================
 
 def calculate_price_movements(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Calcula movimento entre observações
+    consecutivas do mesmo ticker.
+    """
+
     ordered = dataframe.sort_values(
         [
             "ticker",
@@ -839,11 +935,55 @@ def calculate_price_movements(
         ordered[
             "price_factor"
         ]
-        - 1
+        - 1.0
     )
 
     return ordered
 
+
+def nearest_common_factor(
+    factor: float,
+) -> tuple[
+    float,
+    float,
+]:
+    """
+    Identifica o fator corporativo comum
+    mais próximo.
+
+    Isso é evidência para triagem,
+    nunca confirmação automática.
+    """
+
+    nearest = min(
+        COMMON_FACTORS,
+        key=lambda candidate: abs(
+            factor
+            - candidate
+        ),
+    )
+
+    relative_error = (
+        abs(
+            factor
+            - nearest
+        )
+        / nearest
+    )
+
+    return (
+        float(
+            nearest
+        ),
+        float(
+            relative_error
+        ),
+    )
+
+
+# ============================================================
+# Candidate classification
+# ============================================================
 
 def classify_candidate(
     factor: float,
@@ -855,7 +995,24 @@ def classify_candidate(
     str,
     str,
     str,
+    str,
 ]:
+    """
+    Classifica uma observação.
+
+    PRINCÍPIO v5:
+
+    detector != decisão.
+
+    Qualquer movimento que ultrapassa
+    o threshold é somente um candidato
+    e recebe PENDING_REVIEW.
+
+    O CSV governado é o único responsável
+    por CONFIRMED / REJECTED /
+    NOT_APPLICABLE.
+    """
+
     (
         nearest_factor,
         relative_error,
@@ -874,9 +1031,19 @@ def classify_candidate(
 
     if (
         absolute_return
-        >= MIN_ABSOLUTE_DAILY_RETURN
-        and factor_match
+        < MIN_CANDIDATE_ABSOLUTE_DAILY_RETURN
     ):
+        return (
+            nearest_factor,
+            relative_error,
+            factor_match,
+            "NORMAL_PRICE_MOVE",
+            "NONE",
+            "NOT_APPLICABLE",
+            "BELOW_CANDIDATE_THRESHOLD",
+        )
+
+    if factor_match:
         classification = (
             "POSSIBLE_CORPORATE_FACTOR"
         )
@@ -887,34 +1054,34 @@ def classify_candidate(
             else "MEDIUM"
         )
 
-        review_status = (
-            "PENDING_REVIEW"
-        )
-
-    elif (
-        absolute_return
-        >= MIN_ABSOLUTE_DAILY_RETURN
-    ):
-        classification = (
-            "LARGE_SINGLE_DAY_MOVE"
-        )
-
-        confidence = "LOW"
-
-        review_status = (
-            "NOT_APPLICABLE"
+        candidate_reason = (
+            "EXTREME_RETURN_AND_COMMON_FACTOR_MATCH"
         )
 
     else:
         classification = (
-            "NORMAL_PRICE_MOVE"
+            "LARGE_SINGLE_DAY_MOVE"
         )
 
-        confidence = "NONE"
+        if (
+            absolute_return
+            >= LEGACY_V4_THRESHOLD
+        ):
+            confidence = "MEDIUM"
 
-        review_status = (
-            "NOT_APPLICABLE"
+        else:
+            confidence = "LOW"
+
+        candidate_reason = (
+            "EXTREME_RETURN_WITHOUT_COMMON_FACTOR_MATCH"
         )
+
+    # CRÍTICO:
+    # nenhum candidato detectado é descartado
+    # automaticamente na v5.
+    review_status = (
+        "PENDING_REVIEW"
+    )
 
     return (
         nearest_factor,
@@ -923,12 +1090,25 @@ def classify_candidate(
         classification,
         confidence,
         review_status,
+        candidate_reason,
     )
 
+
+# ============================================================
+# Candidate builder
+# ============================================================
 
 def build_discontinuities(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Constrói candidatos a descontinuidade.
+
+    A camada é deliberadamente conservadora:
+    gera candidatos e deixa a decisão para
+    o registry governado.
+    """
+
     movements = calculate_price_movements(
         dataframe
     )
@@ -939,7 +1119,9 @@ def build_discontinuities(
         ].notna()
     ].copy()
 
-    records = []
+    records: list[
+        dict[str, object]
+    ] = []
 
     created_at = datetime.now(
         timezone.utc
@@ -948,6 +1130,24 @@ def build_discontinuities(
     for row in movements.itertuples(
         index=False
     ):
+        daily_return = float(
+            row.daily_return
+        )
+
+        factor = float(
+            row.price_factor
+        )
+
+        if not np.isfinite(
+            daily_return
+        ):
+            continue
+
+        if not np.isfinite(
+            factor
+        ):
+            continue
+
         (
             nearest_factor,
             relative_error,
@@ -955,97 +1155,174 @@ def build_discontinuities(
             classification,
             confidence,
             review_status,
+            candidate_reason,
         ) = classify_candidate(
-            factor=float(
-                row.price_factor
-            ),
-            daily_return=float(
-                row.daily_return
-            ),
+            factor=factor,
+            daily_return=daily_return,
         )
 
-        if classification == (
-            "NORMAL_PRICE_MOVE"
+        if (
+            classification
+            == "NORMAL_PRICE_MOVE"
         ):
             continue
 
+        absolute_daily_return = abs(
+            daily_return
+        )
+
+        detected_by_v4_threshold = (
+            absolute_daily_return
+            >= LEGACY_V4_THRESHOLD
+        )
+
+        newly_visible_in_v5_band = (
+            (
+                absolute_daily_return
+                >= MIN_CANDIDATE_ABSOLUTE_DAILY_RETURN
+            )
+            and
+            (
+                absolute_daily_return
+                < LEGACY_V4_THRESHOLD
+            )
+        )
+
         records.append(
             {
-                "ticker": row.ticker,
-                "cnpj": row.cnpj,
+                "ticker": (
+                    row.ticker
+                ),
+
+                "cnpj": (
+                    row.cnpj
+                ),
+
                 "codigo_cvm": (
                     row.codigo_cvm
                 ),
+
                 "previous_trade_date": (
                     row.previous_trade_date
                 ),
+
                 "event_date": (
                     row.trade_date
                 ),
+
                 "price_before": float(
                     row.previous_close_price
                 ),
+
                 "price_after": float(
                     row.close_price
                 ),
-                "daily_return": float(
-                    row.daily_return
+
+                "daily_return": (
+                    daily_return
                 ),
-                "daily_return_pct": float(
-                    row.daily_return
-                    * 100
+
+                "daily_return_pct": (
+                    daily_return
+                    * 100.0
                 ),
-                "observed_factor": float(
-                    row.price_factor
+
+                "absolute_daily_return": (
+                    absolute_daily_return
                 ),
+
+                "observed_factor": (
+                    factor
+                ),
+
                 "nearest_common_factor": (
                     nearest_factor
                 ),
+
                 "factor_relative_error": (
                     relative_error
                 ),
+
                 "factor_match": (
                     factor_match
                 ),
+
                 "classification": (
                     classification
                 ),
+
                 "confidence": (
                     confidence
                 ),
+
+                "candidate_reason": (
+                    candidate_reason
+                ),
+
                 "review_status": (
                     review_status
                 ),
+
                 "event_type": (
                     "UNKNOWN"
                 ),
+
                 "quantity_multiplier": (
                     np.nan
                 ),
+
                 "price_adjustment_factor": (
                     np.nan
                 ),
+
                 "cash_amount_per_unit": (
                     np.nan
                 ),
+
                 "confirmation_source": (
                     None
                 ),
+
                 "confirmation_date": (
                     pd.NaT
                 ),
+
                 "review_notes": (
                     None
                 ),
+
                 "is_confirmed_corporate_action": (
                     False
                 ),
+
+                "detected_by_v4_threshold": (
+                    detected_by_v4_threshold
+                ),
+
+                "newly_visible_in_v5_band": (
+                    newly_visible_in_v5_band
+                ),
+
+                "candidate_threshold": (
+                    MIN_CANDIDATE_ABSOLUTE_DAILY_RETURN
+                ),
+
+                "detection_policy": (
+                    DETECTION_POLICY
+                ),
+
+                "review_policy": (
+                    REVIEW_POLICY
+                ),
+
                 "discontinuity_version": (
                     DISCONTINUITY_VERSION
                 ),
+
                 "discontinuity_source": (
                     DISCONTINUITY_SOURCE
                 ),
+
                 "created_at": (
                     created_at
                 ),
@@ -1057,21 +1334,33 @@ def build_discontinuities(
     )
 
 
+# ============================================================
+# Governance coverage
+# ============================================================
+
 def validate_review_coverage(
     discontinuities: pd.DataFrame,
     reviews: pd.DataFrame,
 ) -> None:
     """
     Garante que toda decisão governada
-    no CSV ainda possui um candidato
-    correspondente produzido pelo detector.
+    previamente continua correspondendo
+    a um candidato detectado.
 
-    Evita perda silenciosa de decisões
-    manuais após mudanças de fonte ou regra.
+    Como a v5 reduz o threshold,
+    decisões antigas da v4 devem continuar
+    cobertas.
     """
 
     if reviews.empty:
         return
+
+    if discontinuities.empty:
+        raise ValueError(
+            "Existem reviews governados, "
+            "mas nenhum candidato foi "
+            "detectado."
+        )
 
     detected_keys = set(
         zip(
@@ -1084,7 +1373,9 @@ def validate_review_coverage(
         )
     )
 
-    missing_reviews = []
+    missing_reviews: list[
+        dict[str, object]
+    ] = []
 
     for row in reviews.itertuples(
         index=False
@@ -1100,12 +1391,15 @@ def validate_review_coverage(
                     "ticker": (
                         row.ticker
                     ),
+
                     "event_date": (
                         row.event_date
                     ),
+
                     "review_status": (
                         row.review_status
                     ),
+
                     "event_type": (
                         row.event_type
                     ),
@@ -1133,8 +1427,10 @@ def validate_review_coverage(
     )
 
     if missing_reviews:
-        missing_dataframe = pd.DataFrame(
-            missing_reviews
+        missing_dataframe = (
+            pd.DataFrame(
+                missing_reviews
+            )
         )
 
         raise ValueError(
@@ -1149,10 +1445,19 @@ def validate_review_coverage(
     )
 
 
+# ============================================================
+# Apply governed decisions
+# ============================================================
+
 def apply_reviews(
     discontinuities: pd.DataFrame,
     reviews: pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Sobrepõe decisões do registry manual
+    aos defaults PENDING_REVIEW do detector.
+    """
+
     if reviews.empty:
         return discontinuities
 
@@ -1248,24 +1553,50 @@ def apply_reviews(
     return result
 
 
+# ============================================================
+# Output validation
+# ============================================================
+
 def validate_output(
     dataframe: pd.DataFrame,
 ) -> None:
+    """
+    Valida o contrato da camada v5.
+    """
+
     required_columns = [
         "ticker",
         "cnpj",
         "codigo_cvm",
+
         "previous_trade_date",
         "event_date",
+
         "price_before",
         "price_after",
+
         "daily_return",
+        "daily_return_pct",
+        "absolute_daily_return",
+
         "observed_factor",
+
         "classification",
         "confidence",
+        "candidate_reason",
+
         "review_status",
         "event_type",
+
         "is_confirmed_corporate_action",
+
+        "detected_by_v4_threshold",
+        "newly_visible_in_v5_band",
+
+        "candidate_threshold",
+        "detection_policy",
+        "review_policy",
+
         "discontinuity_version",
         "discontinuity_source",
     ]
@@ -1274,6 +1605,19 @@ def validate_output(
         raise ValueError(
             "Nenhuma descontinuidade "
             "foi encontrada."
+        )
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "Output possui colunas "
+            "obrigatórias ausentes: "
+            f"{missing_columns}"
         )
 
     duplicate_count = int(
@@ -1335,6 +1679,72 @@ def validate_output(
         ).sum()
     )
 
+    invalid_version = int(
+        (
+            dataframe[
+                "discontinuity_version"
+            ]
+            != DISCONTINUITY_VERSION
+        ).sum()
+    )
+
+    invalid_threshold = int(
+        (
+            ~np.isclose(
+                dataframe[
+                    "candidate_threshold"
+                ].astype(float),
+                MIN_CANDIDATE_ABSOLUTE_DAILY_RETURN,
+            )
+        ).sum()
+    )
+
+    below_detection_threshold = int(
+        (
+            dataframe[
+                "absolute_daily_return"
+            ]
+            < MIN_CANDIDATE_ABSOLUTE_DAILY_RETURN
+        ).sum()
+    )
+
+    invalid_band_overlap = int(
+        (
+            dataframe[
+                "detected_by_v4_threshold"
+            ]
+            &
+            dataframe[
+                "newly_visible_in_v5_band"
+            ]
+        ).sum()
+    )
+
+    expected_new_band = (
+        (
+            dataframe[
+                "absolute_daily_return"
+            ]
+            >= MIN_CANDIDATE_ABSOLUTE_DAILY_RETURN
+        )
+        &
+        (
+            dataframe[
+                "absolute_daily_return"
+            ]
+            < LEGACY_V4_THRESHOLD
+        )
+    )
+
+    new_band_mismatch = int(
+        (
+            dataframe[
+                "newly_visible_in_v5_band"
+            ]
+            != expected_new_band
+        ).sum()
+    )
+
     print(
         "\n======================================"
     )
@@ -1375,6 +1785,31 @@ def validate_output(
         f"{invalid_source:,}"
     )
 
+    print(
+        "Versão inválida: "
+        f"{invalid_version:,}"
+    )
+
+    print(
+        "Threshold metadata inválido: "
+        f"{invalid_threshold:,}"
+    )
+
+    print(
+        "Eventos abaixo do threshold: "
+        f"{below_detection_threshold:,}"
+    )
+
+    print(
+        "Sobreposição v4/v5 band inválida: "
+        f"{invalid_band_overlap:,}"
+    )
+
+    print(
+        "Mismatch da faixa nova v5: "
+        f"{new_band_mismatch:,}"
+    )
+
     if duplicate_count > 0:
         raise ValueError(
             "Eventos duplicados."
@@ -1409,6 +1844,37 @@ def validate_output(
             "source inconsistente."
         )
 
+    if invalid_version > 0:
+        raise ValueError(
+            "Discontinuidades possuem "
+            "version inconsistente."
+        )
+
+    if invalid_threshold > 0:
+        raise ValueError(
+            "Candidate threshold "
+            "inconsistente."
+        )
+
+    if below_detection_threshold > 0:
+        raise ValueError(
+            "Existem candidatos abaixo "
+            "do threshold v5."
+        )
+
+    if invalid_band_overlap > 0:
+        raise ValueError(
+            "Evento não pode pertencer "
+            "simultaneamente às faixas "
+            "v4 e nova v5."
+        )
+
+    if new_band_mismatch > 0:
+        raise ValueError(
+            "Flag newly_visible_in_v5_band "
+            "inconsistente."
+        )
+
     confirmed = dataframe[
         dataframe[
             "review_status"
@@ -1428,10 +1894,95 @@ def validate_output(
     )
 
 
+# ============================================================
+# Specific regression checks
+# ============================================================
+
+def print_v5_regression_checks(
+    dataframe: pd.DataFrame,
+) -> None:
+    """
+    Verifica explicitamente os episódios
+    que motivaram a evolução da v4 -> v5.
+
+    Não exige que os tickers existam;
+    apenas mostra o resultado caso estejam
+    presentes.
+    """
+
+    focus_tickers = [
+        "KNPR11",
+        "MFII11",
+    ]
+
+    focus = dataframe[
+        dataframe[
+            "ticker"
+        ].isin(
+            focus_tickers
+        )
+    ].copy()
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Regression Check - v5 Blind Spot"
+    )
+    print(
+        "======================================"
+    )
+
+    if focus.empty:
+        print(
+            "KNPR11/MFII11 não apareceram "
+            "entre os candidatos."
+        )
+
+        return
+
+    display_columns = [
+        "ticker",
+        "event_date",
+        "price_before",
+        "price_after",
+        "daily_return_pct",
+        "classification",
+        "factor_match",
+        "confidence",
+        "review_status",
+        "detected_by_v4_threshold",
+        "newly_visible_in_v5_band",
+    ]
+
+    print(
+        focus[
+            display_columns
+        ]
+        .sort_values(
+            [
+                "event_date",
+                "ticker",
+            ]
+        )
+        .to_string(
+            index=False
+        )
+    )
+
+
+# ============================================================
+# Summary
+# ============================================================
+
 def print_summary(
     dataframe: pd.DataFrame,
     silver_file_count: int,
 ) -> None:
+    """
+    Resumo operacional e de governança.
+    """
+
     print(
         "\n======================================"
     )
@@ -1453,6 +2004,21 @@ def print_summary(
     )
 
     print(
+        "Candidate threshold: "
+        f"{MIN_CANDIDATE_ABSOLUTE_DAILY_RETURN * 100:.1f}%"
+    )
+
+    print(
+        f"Detection policy: "
+        f"{DETECTION_POLICY}"
+    )
+
+    print(
+        f"Review policy: "
+        f"{REVIEW_POLICY}"
+    )
+
+    print(
         f"Partições Silver: "
         f"{silver_file_count:,}"
     )
@@ -1467,6 +2033,34 @@ def print_summary(
         f"{dataframe['ticker'].nunique():,}"
     )
 
+    legacy_candidates = int(
+        dataframe[
+            "detected_by_v4_threshold"
+        ].sum()
+    )
+
+    new_v5_candidates = int(
+        dataframe[
+            "newly_visible_in_v5_band"
+        ].sum()
+    )
+
+    print(
+        "\nCobertura por threshold:"
+    )
+
+    print(
+        "  Detectáveis pela v4 "
+        "(|return| >= 50%): "
+        f"{legacy_candidates:,}"
+    )
+
+    print(
+        "  Novos na v5 "
+        "(30% <= |return| < 50%): "
+        f"{new_v5_candidates:,}"
+    )
+
     print(
         "\nClassificações:"
     )
@@ -1474,6 +2068,22 @@ def print_summary(
     for value, count in (
         dataframe[
             "classification"
+        ]
+        .value_counts()
+        .items()
+    ):
+        print(
+            f"  {value}: "
+            f"{count:,}"
+        )
+
+    print(
+        "\nCandidate Reasons:"
+    )
+
+    for value, count in (
+        dataframe[
+            "candidate_reason"
         ]
         .value_counts()
         .items()
@@ -1575,11 +2185,14 @@ def print_summary(
                 "observed_factor",
                 "nearest_common_factor",
                 "factor_relative_error",
+                "factor_match",
+                "classification",
                 "confidence",
+                "candidate_reason",
+                "newly_visible_in_v5_band",
             ]
         ].sort_values(
             [
-                "confidence",
                 "event_date",
                 "ticker",
             ]
@@ -1608,6 +2221,10 @@ def print_summary(
     )
 
 
+# ============================================================
+# Main
+# ============================================================
+
 def main() -> None:
     print(
         "Construindo camada de "
@@ -1622,6 +2239,16 @@ def main() -> None:
     print(
         f"Source: "
         f"{DISCONTINUITY_SOURCE}"
+    )
+
+    print(
+        "Candidate threshold: "
+        f"{MIN_CANDIDATE_ABSOLUTE_DAILY_RETURN * 100:.1f}%"
+    )
+
+    print(
+        "Policy: detector gera candidatos; "
+        "registry governado toma decisões."
     )
 
     silver_files = (
@@ -1665,6 +2292,10 @@ def main() -> None:
         discontinuities
     )
 
+    print_v5_regression_checks(
+        discontinuities
+    )
+
     OUTPUT_DIR.mkdir(
         parents=True,
         exist_ok=True,
@@ -1687,23 +2318,30 @@ def main() -> None:
     )
 
     print(
-        "A fonte desta versão é diretamente "
+        "A fonte continua diretamente "
         "a Silver FII Daily Prices."
     )
 
     print(
         "Nenhuma dependência de "
-        "FII Price History permanece."
+        "FII Price History foi adicionada."
     )
 
     print(
-        "Nenhum evento foi confirmado "
+        "Nenhum candidato novo foi "
+        "confirmado ou descartado "
         "automaticamente."
     )
 
     print(
-        "Decisões governadas existentes foram "
-        "validadas contra os eventos detectados."
+        "Decisões governadas existentes "
+        "foram reaplicadas e validadas."
+    )
+
+    print(
+        "Movimentos entre 30% e 50% agora "
+        "entram explicitamente na fila "
+        "de revisão."
     )
 
     print(
