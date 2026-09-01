@@ -6,10 +6,18 @@ import numpy as np
 import pandas as pd
 
 
-FEATURE_CONTRACT_VERSION = "v2"
+# ============================================================
+# Feature Contract
+# ============================================================
+
+FEATURE_CONTRACT_VERSION = "v3"
 
 
-EXPECTED_FEATURE_VERSION = "v6"
+# ============================================================
+# Upstream semantic contract
+# ============================================================
+
+EXPECTED_FEATURE_VERSION = "v7"
 
 EXPECTED_PRICE_SEMANTICS = (
     "STRUCTURALLY_ADJUSTED_PRICE"
@@ -19,6 +27,19 @@ EXPECTED_RETURN_SEMANTICS = (
     "COMPOUNDED_DAILY_RETURN_ECONOMIC"
 )
 
+EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS = (
+    "TOTAL_ECONOMIC_VALUE_CASH_PLUS_IN_KIND"
+)
+
+EXPECTED_FEATURE_CORPORATE_ACTION_POLICY = (
+    "ECONOMIC_EFFECT_EMBEDDED_IN_RETURNS_"
+    "NO_DIRECT_CA_PAYLOAD_FEATURES"
+)
+
+
+# ============================================================
+# Feature Contract data structure
+# ============================================================
 
 @dataclass(frozen=True)
 class FeatureContract:
@@ -31,7 +52,15 @@ class FeatureContract:
     - versão do contrato;
     - janelas temporais;
     - allowlist explícita de features;
-    - semântica esperada das features.
+    - versão da Gold ML Features;
+    - semântica de preço;
+    - semântica de retorno;
+    - semântica econômica de
+      Corporate Actions;
+    - política de uso de Corporate Actions
+      nas features.
+
+    O contrato é imutável depois de criado.
     """
 
     version: str
@@ -46,17 +75,32 @@ class FeatureContract:
 
     return_semantics: str
 
+    corporate_action_value_semantics: str
+
+    corporate_action_policy: str
+
+
+# ============================================================
+# Feature windows discovery
+# ============================================================
 
 def discover_feature_windows(
     dataframe: pd.DataFrame,
 ) -> list[int]:
     """
     Descobre as janelas temporais declaradas
-    pela Gold ML.
+    pela Gold ML Features.
 
-    Esperado:
+    Exemplo esperado:
 
         feature_windows = "5,10,20"
+
+    O contrato não fixa artificialmente
+    as janelas.
+
+    Elas são herdadas do artefato upstream,
+    desde que exista uma única configuração
+    consistente no dataset.
     """
 
     if (
@@ -129,6 +173,10 @@ def discover_feature_windows(
     return windows
 
 
+# ============================================================
+# Official predictive feature allowlist
+# ============================================================
+
 def build_feature_names(
     windows: list[int],
 ) -> list[str]:
@@ -136,22 +184,27 @@ def build_feature_names(
     Constrói a allowlist oficial
     das features preditivas.
 
-    Princípios do contrato v2:
+    Princípios do Feature Contract v3:
 
+    - allowlist explícita;
     - evita duplicações decimal/percentual;
     - evita preço absoluto;
     - evita médias móveis absolutas;
     - evita colunas RAW de auditoria;
     - evita qualquer target;
+    - evita governança e metadata;
+    - evita payload direto de
+      Corporate Actions;
     - privilegia retornos econômicos,
       volatilidade e relações normalizadas;
     - mantém relações entre janelas.
 
-    Os nomes das 18 features permanecem
-    compatíveis com o contrato v1.
+    A evolução para v3 NÃO altera
+    matematicamente a seleção das features
+    existente no v2.
 
-    A mudança da v2 está na validação
-    explícita da semântica upstream.
+    Para [5, 10, 20], permanecem
+    exatamente 18 features.
     """
 
     if not windows:
@@ -163,6 +216,10 @@ def build_feature_names(
         "daily_return",
     ]
 
+    #
+    # Features por janela
+    #
+
     for window in windows:
         features.extend(
             [
@@ -171,6 +228,10 @@ def build_feature_names(
                 f"price_to_ma{window}",
             ]
         )
+
+    #
+    # Relações entre janelas consecutivas
+    #
 
     for short_window, long_window in zip(
         windows,
@@ -204,26 +265,35 @@ def build_feature_names(
     return features
 
 
+# ============================================================
+# Upstream semantic validation
+# ============================================================
+
 def validate_feature_semantics(
     dataframe: pd.DataFrame,
 ) -> None:
     """
-    Valida a linhagem semântica das features.
+    Valida a linhagem semântica das
+    features.
 
-    O contrato v2 aceita somente features
-    produzidas pela arquitetura econômica
-    atual.
+    Feature Contract v3 aceita somente
+    Features v7 produzidas pela arquitetura
+    econômica atual.
 
-    Isso impede que datasets antigos,
-    mesmo contendo os mesmos nomes de
-    colunas, sejam usados silenciosamente
+    Isso impede que um dataset antigo,
+    mesmo contendo os mesmos nomes físicos
+    de colunas, seja usado silenciosamente
     pelo modelo.
     """
 
     required_metadata_columns = [
         "feature_version",
+
         "price_semantics",
         "return_semantics",
+
+        "corporate_action_value_semantics",
+        "feature_corporate_action_policy",
     ]
 
     missing_columns = [
@@ -274,11 +344,68 @@ def validate_feature_semantics(
         .tolist()
     )
 
+    corporate_action_value_semantics = sorted(
+        dataframe[
+            "corporate_action_value_semantics"
+        ]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .unique()
+        .tolist()
+    )
+
+    corporate_action_policies = sorted(
+        dataframe[
+            "feature_corporate_action_policy"
+        ]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .unique()
+        .tolist()
+    )
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Feature Contract - Semantics"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        "Feature version: "
+        f"{feature_versions}"
+    )
+
+    print(
+        "Price semantics: "
+        f"{price_semantics}"
+    )
+
+    print(
+        "Return semantics: "
+        f"{return_semantics}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{corporate_action_value_semantics}"
+    )
+
+    print(
+        "Corporate Action feature policy: "
+        f"{corporate_action_policies}"
+    )
+
     if feature_versions != [
         EXPECTED_FEATURE_VERSION
     ]:
         raise ValueError(
-            "Feature Contract v2 exige "
+            "Feature Contract v3 exige "
             f"feature_version="
             f"{EXPECTED_FEATURE_VERSION}. "
             "Encontrado: "
@@ -289,7 +416,7 @@ def validate_feature_semantics(
         EXPECTED_PRICE_SEMANTICS
     ]:
         raise ValueError(
-            "Feature Contract v2 exige "
+            "Feature Contract v3 exige "
             "price_semantics="
             f"{EXPECTED_PRICE_SEMANTICS}. "
             "Encontrado: "
@@ -300,13 +427,240 @@ def validate_feature_semantics(
         EXPECTED_RETURN_SEMANTICS
     ]:
         raise ValueError(
-            "Feature Contract v2 exige "
+            "Feature Contract v3 exige "
             "return_semantics="
             f"{EXPECTED_RETURN_SEMANTICS}. "
             "Encontrado: "
             f"{return_semantics}"
         )
 
+    if corporate_action_value_semantics != [
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    ]:
+        raise ValueError(
+            "Feature Contract v3 exige "
+            "corporate_action_value_semantics="
+            f"{EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS}. "
+            "Encontrado: "
+            f"{corporate_action_value_semantics}"
+        )
+
+    if corporate_action_policies != [
+        EXPECTED_FEATURE_CORPORATE_ACTION_POLICY
+    ]:
+        raise ValueError(
+            "Feature Contract v3 exige "
+            "feature_corporate_action_policy="
+            f"{EXPECTED_FEATURE_CORPORATE_ACTION_POLICY}. "
+            "Encontrado: "
+            f"{corporate_action_policies}"
+        )
+
+    print(
+        "\nSemântica upstream aprovada."
+    )
+
+
+# ============================================================
+# Leakage protection
+# ============================================================
+
+def is_forbidden_feature(
+    column: str,
+) -> bool:
+    """
+    Detecta categorias de colunas que
+    jamais devem entrar no vetor X.
+
+    Esta função funciona como uma
+    segunda barreira de segurança.
+
+    A barreira principal continua sendo
+    a allowlist explícita construída por
+    build_feature_names().
+    """
+
+    normalized = (
+        str(column)
+        .strip()
+        .lower()
+    )
+
+    #
+    # --------------------------------------------------------
+    # Future target / labels
+    # --------------------------------------------------------
+    #
+
+    if normalized.startswith(
+        "target_"
+    ):
+        return True
+
+    if "next_" in normalized:
+        return True
+
+    if normalized in {
+        "target",
+        "target_date",
+        "target_name",
+    }:
+        return True
+
+    #
+    # --------------------------------------------------------
+    # Percent duplicate representations
+    # --------------------------------------------------------
+    #
+
+    if normalized.endswith(
+        "_pct"
+    ):
+        return True
+
+    #
+    # --------------------------------------------------------
+    # Raw / audit data
+    # --------------------------------------------------------
+    #
+
+    if "_raw" in normalized:
+        return True
+
+    #
+    # --------------------------------------------------------
+    # Identity
+    # --------------------------------------------------------
+    #
+
+    if normalized in {
+        "feature_date",
+        "trade_date",
+        "ticker",
+        "cnpj",
+        "codigo_cvm",
+    }:
+        return True
+
+    #
+    # --------------------------------------------------------
+    # Absolute prices / absolute levels
+    # --------------------------------------------------------
+    #
+
+    if normalized in {
+        "close_price",
+        "close_price_raw",
+        "close_price_adjusted",
+        "trades_quantity",
+        "observations_count",
+    }:
+        return True
+
+    #
+    # --------------------------------------------------------
+    # Audit return aliases
+    # --------------------------------------------------------
+    #
+
+    if normalized in {
+        "daily_return_raw",
+        "daily_return_adjusted_price",
+        "daily_return_economic",
+    }:
+        return True
+
+    #
+    # --------------------------------------------------------
+    # Corporate Action payload
+    # --------------------------------------------------------
+    #
+
+    corporate_action_payload_tokens = [
+        "cash_amount",
+        "cash_flow",
+        "in_kind_amount",
+        "corporate_action_value",
+        "confirmed_cash",
+        "confirmed_in_kind",
+        "confirmed_total_economic",
+        "quantity_multiplier",
+        "price_adjustment_factor",
+        "asset_ticker",
+        "quantity_per_unit",
+    ]
+
+    if any(
+        token in normalized
+        for token
+        in corporate_action_payload_tokens
+    ):
+        return True
+
+    #
+    # --------------------------------------------------------
+    # Governance / eligibility / review
+    # --------------------------------------------------------
+    #
+
+    governance_tokens = [
+        "ml_eligible",
+        "eligibility",
+        "quality_status",
+        "review_status",
+        "review_",
+        "confirmed_action",
+        "pending_",
+        "blocking_",
+        "ineligibility",
+    ]
+
+    if any(
+        token in normalized
+        for token
+        in governance_tokens
+    ):
+        return True
+
+    #
+    # --------------------------------------------------------
+    # Split metadata
+    # --------------------------------------------------------
+    #
+
+    if normalized.startswith(
+        "split_"
+    ):
+        return True
+
+    #
+    # --------------------------------------------------------
+    # Generic technical metadata
+    # --------------------------------------------------------
+    #
+
+    metadata_tokens = [
+        "_version",
+        "_semantics",
+        "_policy",
+        "_created_at",
+        "created_at",
+        "feature_windows",
+    ]
+
+    if any(
+        token in normalized
+        for token
+        in metadata_tokens
+    ):
+        return True
+
+    return False
+
+
+# ============================================================
+# Feature allowlist validation
+# ============================================================
 
 def validate_feature_contract(
     dataframe: pd.DataFrame,
@@ -323,6 +677,22 @@ def validate_feature_contract(
     - todas as features são numéricas;
     - não existem valores infinitos
       nas features disponíveis.
+
+    NULL pode existir em determinadas
+    features relacionais quando a operação
+    matemática é estruturalmente indefinida,
+    por exemplo:
+
+        volatility_short / volatility_long
+
+    quando:
+
+        volatility_long == 0
+
+    O tratamento desses NULLs pertence ao
+    pipeline/modelo consumidor e não deve
+    ser convertido artificialmente em
+    infinito ou número arbitrário aqui.
     """
 
     missing_columns = [
@@ -356,41 +726,19 @@ def validate_feature_contract(
             f"{duplicate_features}"
         )
 
-    suspicious_columns = [
+    forbidden_columns = [
         column
         for column in feature_columns
-        if (
-            column.startswith(
-                "target_"
-            )
-            or "next_" in column
-            or column.endswith(
-                "_pct"
-            )
-            or "_raw" in column
-            or column
-            in {
-                "feature_date",
-                "ticker",
-                "cnpj",
-                "codigo_cvm",
-                "close_price",
-                "close_price_raw",
-                "close_price_adjusted",
-                "trades_quantity",
-                "observations_count",
-                "daily_return_raw",
-                "daily_return_adjusted_price",
-                "daily_return_economic",
-            }
+        if is_forbidden_feature(
+            column
         )
     ]
 
-    if suspicious_columns:
+    if forbidden_columns:
         raise ValueError(
             "Features proibidas ou suspeitas "
             "no contrato: "
-            f"{suspicious_columns}"
+            f"{forbidden_columns}"
         )
 
     non_numeric_columns = [
@@ -442,6 +790,43 @@ def validate_feature_contract(
             f"{non_finite_counts}"
         )
 
+    print(
+        "\n======================================"
+    )
+    print(
+        "Feature Contract - Allowlist"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        f"Features aprovadas: "
+        f"{len(feature_columns)}"
+    )
+
+    for column in feature_columns:
+        null_count = int(
+            dataframe[
+                column
+            ]
+            .isna()
+            .sum()
+        )
+
+        print(
+            f"  {column}: "
+            f"{null_count:,} NULL"
+        )
+
+    print(
+        "\nAllowlist aprovada."
+    )
+
+
+# ============================================================
+# Structural feature-count validation
+# ============================================================
 
 def validate_expected_feature_count(
     windows: list[int],
@@ -458,11 +843,14 @@ def validate_expected_feature_count(
         + 3 features por janela
 
         + 4 relações para cada par
-          de janelas consecutivas
+          consecutivo de janelas
 
     Para [5, 10, 20]:
 
-        1 + (3 * 3) + (4 * 2)
+        1
+        + (3 * 3)
+        + (4 * 2)
+
         = 18 features
     """
 
@@ -490,19 +878,26 @@ def validate_expected_feature_count(
         )
 
 
+# ============================================================
+# Contract creation
+# ============================================================
+
 def get_feature_contract(
     dataframe: pd.DataFrame,
 ) -> FeatureContract:
     """
-    Retorna o Feature Contract completo.
+    Retorna o Feature Contract oficial
+    completo.
 
     Ordem de validação:
 
     1. semântica upstream;
     2. descoberta das janelas;
     3. construção da allowlist;
-    4. validação estrutural;
-    5. criação do contrato imutável.
+    4. validação da quantidade;
+    5. proteção contra leakage;
+    6. validação numérica;
+    7. criação do contrato imutável.
     """
 
     validate_feature_semantics(
@@ -531,7 +926,7 @@ def get_feature_contract(
         feature_columns=features,
     )
 
-    return FeatureContract(
+    contract = FeatureContract(
         version=FEATURE_CONTRACT_VERSION,
 
         windows=tuple(
@@ -553,4 +948,64 @@ def get_feature_contract(
         return_semantics=(
             EXPECTED_RETURN_SEMANTICS
         ),
+
+        corporate_action_value_semantics=(
+            EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+        ),
+
+        corporate_action_policy=(
+            EXPECTED_FEATURE_CORPORATE_ACTION_POLICY
+        ),
     )
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Feature Contract"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        f"Version: "
+        f"{contract.version}"
+    )
+
+    print(
+        "Source Features: "
+        f"{contract.source_feature_version}"
+    )
+
+    print(
+        "Windows: "
+        f"{list(contract.windows)}"
+    )
+
+    print(
+        "Feature count: "
+        f"{len(contract.features)}"
+    )
+
+    print(
+        "Price semantics: "
+        f"{contract.price_semantics}"
+    )
+
+    print(
+        "Return semantics: "
+        f"{contract.return_semantics}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{contract.corporate_action_value_semantics}"
+    )
+
+    print(
+        "Corporate Action policy: "
+        f"{contract.corporate_action_policy}"
+    )
+
+    return contract

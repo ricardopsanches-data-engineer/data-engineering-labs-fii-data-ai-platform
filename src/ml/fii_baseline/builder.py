@@ -35,6 +35,10 @@ from src.ml.common.feature_contract import (
 )
 
 
+# ============================================================
+# Paths
+# ============================================================
+
 SPLIT_BASE_DIR = (
     PROJECT_ROOT
     / "data"
@@ -59,25 +63,39 @@ TEST_PATH = (
 )
 
 
+# ============================================================
+# Runtime configuration
+# ============================================================
+
 DEFAULT_RANDOM_STATE = 42
 
 DEFAULT_RF_ESTIMATORS = 200
 
 
-BASELINE_VERSION = "v4"
+# ============================================================
+# Baseline contract
+# ============================================================
+
+BASELINE_VERSION = "v5"
 
 
-EXPECTED_SPLIT_VERSION = "v2"
+EXPECTED_SPLIT_VERSION = "v3"
 
-EXPECTED_TRAINING_DATASET_VERSION = "v3"
+EXPECTED_TRAINING_DATASET_VERSION = "v4"
 
-EXPECTED_FEATURE_CONTRACT_VERSION = "v2"
+EXPECTED_FEATURE_CONTRACT_VERSION = "v3"
 
-EXPECTED_FEATURE_VERSION = "v6"
+EXPECTED_FEATURE_VERSION = "v7"
 
-EXPECTED_ELIGIBILITY_VERSION = "v2"
+EXPECTED_ELIGIBILITY_VERSION = "v3"
 
-EXPECTED_PRICE_HISTORY_VERSION = "v2"
+EXPECTED_PRICE_QUALITY_VERSION = "v2"
+
+EXPECTED_PRICE_HISTORY_VERSION = "v3"
+
+EXPECTED_PRICE_HISTORY_SOURCE = (
+    "FII_CORPORATE_ACTION_ADJUSTED_PRICES_V3"
+)
 
 EXPECTED_TARGET_HORIZON = 5
 
@@ -97,6 +115,14 @@ EXPECTED_RETURN_SEMANTICS = (
     "COMPOUNDED_DAILY_RETURN_ECONOMIC"
 )
 
+EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS = (
+    "TOTAL_ECONOMIC_VALUE_CASH_PLUS_IN_KIND"
+)
+
+
+# ============================================================
+# Result structures
+# ============================================================
 
 @dataclass
 class MajorityDirectionBaseline:
@@ -116,6 +142,11 @@ class MajorityDirectionBaseline:
 
 @dataclass
 class ModelResult:
+    """
+    Resultado de um modelo avaliado
+    exclusivamente na VALIDATION.
+    """
+
     name: str
 
     mae: float
@@ -137,6 +168,10 @@ class ModelResult:
     prediction_median: float
 
 
+# ============================================================
+# Split loading
+# ============================================================
+
 def load_split(
     path: Path,
     split_name: str,
@@ -154,6 +189,25 @@ def load_split(
     dataframe = pd.read_parquet(
         path
     )
+
+    required_identity_columns = [
+        "feature_date",
+        "target_date",
+        "ticker",
+    ]
+
+    missing_identity_columns = [
+        column
+        for column in required_identity_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_identity_columns:
+        raise ValueError(
+            f"{split_name} possui schema "
+            "mínimo incompatível: "
+            f"{missing_identity_columns}"
+        )
 
     dataframe[
         "feature_date"
@@ -189,6 +243,10 @@ def load_split(
 
     return dataframe
 
+
+# ============================================================
+# Metadata helpers
+# ============================================================
 
 def get_unique_string_value(
     dataframe: pd.DataFrame,
@@ -265,6 +323,10 @@ def get_unique_int_value(
     )
 
 
+# ============================================================
+# Target discovery
+# ============================================================
+
 def discover_target_column(
     dataframe: pd.DataFrame,
 ) -> str:
@@ -313,6 +375,10 @@ def discover_target_column(
     return target_column
 
 
+# ============================================================
+# Split contract validation
+# ============================================================
+
 def validate_split_contract(
     dataframe: pd.DataFrame,
     split_name: str,
@@ -321,13 +387,15 @@ def validate_split_contract(
     """
     Valida contrato completo de um split.
 
-    Baseline v4 exige:
+    Baseline v5 exige:
 
-    - Temporal Split v2;
-    - Training Dataset v3;
-    - Features v6;
-    - Eligibility v2;
-    - Price History v2;
+    - Temporal Split v3;
+    - Training Dataset v4;
+    - Feature Contract v3;
+    - Features v7;
+    - Eligibility v3;
+    - Price Quality v2;
+    - Price History v3;
     - target econômico T+5;
     - somente ml_eligible=True.
     """
@@ -353,17 +421,34 @@ def validate_split_contract(
 
         "source_feature_version",
         "source_ml_eligibility_version",
+        "source_price_quality_version",
         "source_price_history_version",
+        "source_price_history_source",
 
         "price_semantics",
         "return_semantics",
+        "corporate_action_value_semantics",
 
         "split_name",
         "split_version",
 
         "split_source_training_dataset_version",
+        "split_source_feature_version",
+        "split_source_ml_eligibility_version",
+        "split_source_price_quality_version",
+        "split_source_price_history_version",
+
         "split_requires_ml_eligible",
         "split_purge_semantics",
+
+        "split_target_horizon",
+        "split_target_horizon_semantics",
+        "split_target_return_semantics",
+
+        "split_price_semantics",
+        "split_return_semantics",
+        "split_corporate_action_value_semantics",
+
         "test_holdout_policy",
     ]
 
@@ -420,6 +505,8 @@ def validate_split_contract(
             ~dataframe[
                 "feature_ready"
             ]
+            .fillna(False)
+            .astype(bool)
         ).sum()
     )
 
@@ -428,6 +515,8 @@ def validate_split_contract(
             ~dataframe[
                 "ml_eligible"
             ]
+            .fillna(False)
+            .astype(bool)
         ).sum()
     )
 
@@ -484,10 +573,42 @@ def validate_split_contract(
         )
     )
 
+    split_feature_version = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="split_source_feature_version",
+            split_name=split_name,
+        )
+    )
+
     eligibility_version = (
         get_unique_string_value(
             dataframe=dataframe,
             column="source_ml_eligibility_version",
+            split_name=split_name,
+        )
+    )
+
+    split_eligibility_version = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="split_source_ml_eligibility_version",
+            split_name=split_name,
+        )
+    )
+
+    price_quality_version = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="source_price_quality_version",
+            split_name=split_name,
+        )
+    )
+
+    split_price_quality_version = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="split_source_price_quality_version",
             split_name=split_name,
         )
     )
@@ -500,10 +621,34 @@ def validate_split_contract(
         )
     )
 
+    split_price_history_version = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="split_source_price_history_version",
+            split_name=split_name,
+        )
+    )
+
+    price_history_source = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="source_price_history_source",
+            split_name=split_name,
+        )
+    )
+
     target_horizon = (
         get_unique_int_value(
             dataframe=dataframe,
             column="target_horizon",
+            split_name=split_name,
+        )
+    )
+
+    split_target_horizon = (
+        get_unique_int_value(
+            dataframe=dataframe,
+            column="split_target_horizon",
             split_name=split_name,
         )
     )
@@ -516,10 +661,26 @@ def validate_split_contract(
         )
     )
 
+    split_target_horizon_semantics = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="split_target_horizon_semantics",
+            split_name=split_name,
+        )
+    )
+
     target_return_semantics = (
         get_unique_string_value(
             dataframe=dataframe,
             column="target_return_semantics",
+            split_name=split_name,
+        )
+    )
+
+    split_target_return_semantics = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="split_target_return_semantics",
             split_name=split_name,
         )
     )
@@ -532,10 +693,44 @@ def validate_split_contract(
         )
     )
 
+    split_price_semantics = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="split_price_semantics",
+            split_name=split_name,
+        )
+    )
+
     return_semantics = (
         get_unique_string_value(
             dataframe=dataframe,
             column="return_semantics",
+            split_name=split_name,
+        )
+    )
+
+    split_return_semantics = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="split_return_semantics",
+            split_name=split_name,
+        )
+    )
+
+    corporate_action_value_semantics = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column="corporate_action_value_semantics",
+            split_name=split_name,
+        )
+    )
+
+    split_corporate_action_value_semantics = (
+        get_unique_string_value(
+            dataframe=dataframe,
+            column=(
+                "split_corporate_action_value_semantics"
+            ),
             split_name=split_name,
         )
     )
@@ -625,8 +820,33 @@ def validate_split_contract(
     )
 
     print(
+        "Feature version: "
+        f"{feature_version}"
+    )
+
+    print(
+        "Eligibility version: "
+        f"{eligibility_version}"
+    )
+
+    print(
+        "Price Quality version: "
+        f"{price_quality_version}"
+    )
+
+    print(
+        "Price History version: "
+        f"{price_history_version}"
+    )
+
+    print(
         "Target semantics: "
         f"{target_return_semantics}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{corporate_action_value_semantics}"
     )
 
     if duplicate_count > 0:
@@ -674,7 +894,7 @@ def validate_split_contract(
 
     if split_version != EXPECTED_SPLIT_VERSION:
         raise ValueError(
-            "Baseline v4 exige "
+            "Baseline v5 exige "
             f"Temporal Split "
             f"{EXPECTED_SPLIT_VERSION}."
         )
@@ -684,7 +904,7 @@ def validate_split_contract(
         != EXPECTED_TRAINING_DATASET_VERSION
     ):
         raise ValueError(
-            "Baseline v4 exige "
+            "Baseline v5 exige "
             f"Training Dataset "
             f"{EXPECTED_TRAINING_DATASET_VERSION}."
         )
@@ -703,9 +923,18 @@ def validate_split_contract(
         != EXPECTED_FEATURE_VERSION
     ):
         raise ValueError(
-            "Baseline v4 exige "
+            "Baseline v5 exige "
             f"Features "
             f"{EXPECTED_FEATURE_VERSION}."
+        )
+
+    if (
+        split_feature_version
+        != EXPECTED_FEATURE_VERSION
+    ):
+        raise ValueError(
+            "Split referencia Features "
+            "incompatível."
         )
 
     if (
@@ -713,9 +942,37 @@ def validate_split_contract(
         != EXPECTED_ELIGIBILITY_VERSION
     ):
         raise ValueError(
-            "Baseline v4 exige "
+            "Baseline v5 exige "
             f"ML Eligibility "
             f"{EXPECTED_ELIGIBILITY_VERSION}."
+        )
+
+    if (
+        split_eligibility_version
+        != EXPECTED_ELIGIBILITY_VERSION
+    ):
+        raise ValueError(
+            "Split referencia ML Eligibility "
+            "incompatível."
+        )
+
+    if (
+        price_quality_version
+        != EXPECTED_PRICE_QUALITY_VERSION
+    ):
+        raise ValueError(
+            "Baseline v5 exige "
+            "Price Quality "
+            f"{EXPECTED_PRICE_QUALITY_VERSION}."
+        )
+
+    if (
+        split_price_quality_version
+        != EXPECTED_PRICE_QUALITY_VERSION
+    ):
+        raise ValueError(
+            "Split referencia Price Quality "
+            "incompatível."
         )
 
     if (
@@ -723,9 +980,28 @@ def validate_split_contract(
         != EXPECTED_PRICE_HISTORY_VERSION
     ):
         raise ValueError(
-            "Baseline v4 exige "
-            f"Price History "
+            "Baseline v5 exige "
+            "Price History "
             f"{EXPECTED_PRICE_HISTORY_VERSION}."
+        )
+
+    if (
+        split_price_history_version
+        != EXPECTED_PRICE_HISTORY_VERSION
+    ):
+        raise ValueError(
+            "Split referencia Price History "
+            "incompatível."
+        )
+
+    if (
+        price_history_source
+        != EXPECTED_PRICE_HISTORY_SOURCE
+    ):
+        raise ValueError(
+            "Baseline encontrou "
+            "Price History source "
+            "incompatível."
         )
 
     if (
@@ -733,9 +1009,18 @@ def validate_split_contract(
         != EXPECTED_TARGET_HORIZON
     ):
         raise ValueError(
-            "Baseline v4 exige "
+            "Baseline v5 exige "
             f"target_horizon="
             f"{EXPECTED_TARGET_HORIZON}."
+        )
+
+    if (
+        split_target_horizon
+        != EXPECTED_TARGET_HORIZON
+    ):
+        raise ValueError(
+            "Split possui target horizon "
+            "incompatível."
         )
 
     if (
@@ -748,12 +1033,30 @@ def validate_split_contract(
         )
 
     if (
+        split_target_horizon_semantics
+        != EXPECTED_TARGET_HORIZON_SEMANTICS
+    ):
+        raise ValueError(
+            "Split possui target horizon "
+            "semantics incompatível."
+        )
+
+    if (
         target_return_semantics
         != EXPECTED_TARGET_RETURN_SEMANTICS
     ):
         raise ValueError(
             "Baseline exige target "
             "econômico."
+        )
+
+    if (
+        split_target_return_semantics
+        != EXPECTED_TARGET_RETURN_SEMANTICS
+    ):
+        raise ValueError(
+            "Split possui target return "
+            "semantics incompatível."
         )
 
     if (
@@ -765,11 +1068,47 @@ def validate_split_contract(
         )
 
     if (
+        split_price_semantics
+        != EXPECTED_PRICE_SEMANTICS
+    ):
+        raise ValueError(
+            "Split possui "
+            "price_semantics incompatível."
+        )
+
+    if (
         return_semantics
         != EXPECTED_RETURN_SEMANTICS
     ):
         raise ValueError(
             "return_semantics incompatível."
+        )
+
+    if (
+        split_return_semantics
+        != EXPECTED_RETURN_SEMANTICS
+    ):
+        raise ValueError(
+            "Split possui "
+            "return_semantics incompatível."
+        )
+
+    if (
+        corporate_action_value_semantics
+        != EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    ):
+        raise ValueError(
+            "Corporate Action value semantics "
+            "incompatível."
+        )
+
+    if (
+        split_corporate_action_value_semantics
+        != EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    ):
+        raise ValueError(
+            "Split possui Corporate Action "
+            "value semantics incompatível."
         )
 
     if eligibility_policy_values != [
@@ -796,6 +1135,10 @@ def validate_split_contract(
         )
 
 
+# ============================================================
+# All-splits validation
+# ============================================================
+
 def validate_all_splits(
     train: pd.DataFrame,
     validation: pd.DataFrame,
@@ -806,7 +1149,7 @@ def validate_all_splits(
     Valida os três splits.
 
     TEST é validado estruturalmente,
-    mas não será utilizado na modelagem.
+    mas não é utilizado na modelagem.
     """
 
     print(
@@ -841,6 +1184,10 @@ def validate_all_splits(
         "\nData Quality dos splits aprovada."
     )
 
+
+# ============================================================
+# Target consistency
+# ============================================================
 
 def validate_target_consistency(
     train: pd.DataFrame,
@@ -887,6 +1234,10 @@ def validate_target_consistency(
         )
 
 
+# ============================================================
+# X / y preparation
+# ============================================================
+
 def prepare_xy(
     dataframe: pd.DataFrame,
     feature_columns: list[str],
@@ -896,7 +1247,11 @@ def prepare_xy(
     pd.Series,
 ]:
     """
-    Separa X e y.
+    Separa X e y usando exclusivamente
+    a allowlist do Feature Contract.
+
+    Nenhuma seleção automática por dtype
+    é utilizada.
     """
 
     x = dataframe[
@@ -915,6 +1270,10 @@ def prepare_xy(
     )
 
 
+# ============================================================
+# Models
+# ============================================================
+
 def build_models(
     random_state: int,
     rf_estimators: int,
@@ -923,8 +1282,15 @@ def build_models(
     Modelos baseline.
 
     Todos os transformers são ajustados
-    exclusivamente no TRAIN através
-    do Pipeline do sklearn.
+    exclusivamente no TRAIN por meio
+    de sklearn Pipeline.
+
+    NaNs estruturais são tratados por
+    SimpleImputer ajustado somente
+    no TRAIN.
+
+    Portanto statistics de VALIDATION
+    e TEST não entram no imputer/scaler.
     """
 
     models: dict[
@@ -996,15 +1362,16 @@ def build_models(
     return models
 
 
+# ============================================================
+# Majority direction baseline
+# ============================================================
+
 def fit_majority_direction_baseline(
     y_train: pd.Series,
 ) -> MajorityDirectionBaseline:
     """
     Aprende a regra direcional SOMENTE
     no TRAIN.
-
-    Nenhuma informação da validation
-    é usada para escolher a direção.
     """
 
     positive_rate = float(
@@ -1045,7 +1412,7 @@ def evaluate_majority_direction_baseline(
 ) -> float:
     """
     Avalia na VALIDATION a regra fixa
-    aprendida no TRAIN.
+    aprendida exclusivamente no TRAIN.
     """
 
     true_positive = (
@@ -1082,6 +1449,10 @@ def evaluate_majority_direction_baseline(
         accuracy
     )
 
+
+# ============================================================
+# Metrics
+# ============================================================
 
 def calculate_directional_accuracy(
     y_true: pd.Series,
@@ -1169,6 +1540,10 @@ def calculate_metrics(
     )
 
 
+# ============================================================
+# Prediction validation
+# ============================================================
+
 def validate_predictions(
     model_name: str,
     predictions: np.ndarray,
@@ -1176,8 +1551,7 @@ def validate_predictions(
     """
     Proteção contra previsões inválidas.
 
-    Não corta outliers automaticamente:
-    apenas impede NaN/inf.
+    Nenhum clipping automático é aplicado.
     """
 
     predictions_array = np.asarray(
@@ -1200,6 +1574,10 @@ def validate_predictions(
             "previsões não finitas."
         )
 
+
+# ============================================================
+# Train / validation evaluation
+# ============================================================
 
 def evaluate_models(
     models: dict[str, object],
@@ -1376,6 +1754,10 @@ def evaluate_models(
     return results
 
 
+# ============================================================
+# Results dataframe
+# ============================================================
+
 def results_to_dataframe(
     results: list[ModelResult],
 ) -> pd.DataFrame:
@@ -1424,6 +1806,10 @@ def results_to_dataframe(
     )
 
 
+# ============================================================
+# Feature Contract diagnostics
+# ============================================================
+
 def print_feature_contract_summary(
     feature_contract: object,
 ) -> None:
@@ -1435,7 +1821,7 @@ def print_feature_contract_summary(
         "\n======================================"
     )
     print(
-        "Feature Contract"
+        "Feature Contract - Baseline"
     )
     print(
         "======================================"
@@ -1462,6 +1848,16 @@ def print_feature_contract_summary(
     )
 
     print(
+        "Corporate Action value semantics: "
+        f"{feature_contract.corporate_action_value_semantics}"
+    )
+
+    print(
+        "Corporate Action policy: "
+        f"{feature_contract.corporate_action_policy}"
+    )
+
+    print(
         f"Windows: "
         f"{feature_contract.windows}"
     )
@@ -1481,11 +1877,146 @@ def print_feature_contract_summary(
         != EXPECTED_FEATURE_CONTRACT_VERSION
     ):
         raise ValueError(
-            "Baseline v4 exige "
+            "Baseline v5 exige "
             f"Feature Contract "
             f"{EXPECTED_FEATURE_CONTRACT_VERSION}."
         )
 
+    if (
+        feature_contract.source_feature_version
+        != EXPECTED_FEATURE_VERSION
+    ):
+        raise ValueError(
+            "Feature Contract referencia "
+            "versão de Features incompatível."
+        )
+
+    if (
+        feature_contract.corporate_action_value_semantics
+        != EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    ):
+        raise ValueError(
+            "Feature Contract possui "
+            "Corporate Action semantics "
+            "incompatível."
+        )
+
+
+# ============================================================
+# Feature matrix diagnostics
+# ============================================================
+
+def print_feature_matrix_diagnostics(
+    x_train: pd.DataFrame,
+    x_validation: pd.DataFrame,
+) -> None:
+    """
+    Diagnóstico explícito dos NaNs
+    estruturais antes da imputação.
+
+    Isso permite comprovar que:
+
+    - Feature Contract aceita NaN estrutural;
+    - sklearn Pipeline realiza a imputação;
+    - imputer é treinado somente no TRAIN.
+    """
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Diagnóstico - Feature Matrix"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        f"Features: "
+        f"{x_train.shape[1]:,}"
+    )
+
+    print(
+        f"Train rows: "
+        f"{len(x_train):,}"
+    )
+
+    print(
+        f"Validation rows: "
+        f"{len(x_validation):,}"
+    )
+
+    train_nulls = (
+        x_train
+        .isna()
+        .sum()
+    )
+
+    validation_nulls = (
+        x_validation
+        .isna()
+        .sum()
+    )
+
+    train_total_nulls = int(
+        train_nulls.sum()
+    )
+
+    validation_total_nulls = int(
+        validation_nulls.sum()
+    )
+
+    print(
+        "NaNs antes da imputação:"
+    )
+
+    print(
+        f"  Train total: "
+        f"{train_total_nulls:,}"
+    )
+
+    print(
+        f"  Validation total: "
+        f"{validation_total_nulls:,}"
+    )
+
+    columns_with_nulls = sorted(
+        set(
+            train_nulls[
+                train_nulls > 0
+            ].index.tolist()
+        )
+        |
+        set(
+            validation_nulls[
+                validation_nulls > 0
+            ].index.tolist()
+        )
+    )
+
+    if not columns_with_nulls:
+        print(
+            "  Nenhuma feature com NaN."
+        )
+
+    else:
+        print(
+            "\nFeatures com NaN:"
+        )
+
+        for column in columns_with_nulls:
+            print(
+                f"  {column}: "
+                f"train="
+                f"{int(train_nulls.get(column, 0)):,} | "
+                f"validation="
+                f"{int(validation_nulls.get(column, 0)):,}"
+            )
+
+
+# ============================================================
+# Target diagnostics
+# ============================================================
 
 def print_target_summary(
     y_train: pd.Series,
@@ -1581,6 +2112,10 @@ def print_target_summary(
             )
 
 
+# ============================================================
+# Majority baseline diagnostics
+# ============================================================
+
 def print_majority_baseline(
     baseline: MajorityDirectionBaseline,
     validation_accuracy: float,
@@ -1589,7 +2124,8 @@ def print_majority_baseline(
     Exibe claramente:
 
     - regra aprendida no TRAIN;
-    - desempenho dessa regra na VALIDATION.
+    - desempenho da mesma regra
+      na VALIDATION.
     """
 
     print(
@@ -1637,14 +2173,16 @@ def print_majority_baseline(
     )
 
 
+# ============================================================
+# Prediction diagnostics
+# ============================================================
+
 def print_prediction_diagnostics(
     results: pd.DataFrame,
     y_validation: pd.Series,
 ) -> None:
     """
-    Diagnóstico específico para verificar
-    se as previsões absurdas observadas
-    anteriormente desapareceram.
+    Diagnóstico das previsões.
 
     Nenhum clipping é feito.
     """
@@ -1698,6 +2236,10 @@ def print_prediction_diagnostics(
             f"{row['prediction_median'] * 100:.4f}%"
         )
 
+
+# ============================================================
+# Metric rankings
+# ============================================================
 
 def print_metric_rankings(
     results: pd.DataFrame,
@@ -1793,6 +2335,10 @@ def print_metric_rankings(
             )
 
 
+# ============================================================
+# Best models by metric
+# ============================================================
+
 def print_best_by_metric(
     results: pd.DataFrame,
 ) -> None:
@@ -1884,12 +2430,16 @@ def print_best_by_metric(
     )
 
 
+# ============================================================
+# Main
+# ============================================================
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Executa FII ML Baseline v4 "
-            "sobre dados economicamente "
-            "corrigidos."
+            "Executa FII ML Baseline v5 "
+            "sobre a cadeia econômica "
+            "governada da Fase 0."
         )
     )
 
@@ -1983,6 +2533,15 @@ def main() -> None:
         target_column=target_column,
     )
 
+    #
+    # Feature Contract é criado a partir
+    # do TRAIN.
+    #
+    # Nenhuma informação de VALIDATION
+    # ou TEST é usada para definir
+    # a allowlist.
+    #
+
     feature_contract = (
         get_feature_contract(
             train
@@ -2050,18 +2609,20 @@ def main() -> None:
         "e não participará de métricas."
     )
 
+    print_feature_matrix_diagnostics(
+        x_train=x_train,
+        x_validation=x_validation,
+    )
+
     print_target_summary(
         y_train=y_train,
         y_validation=y_validation,
     )
 
     #
-    # -----------------------------------------
-    # Majority baseline
-    #
-    # APRENDE no TRAIN.
-    # AVALIA a regra fixa na VALIDATION.
-    # -----------------------------------------
+    # --------------------------------------------------------
+    # Majority direction baseline
+    # --------------------------------------------------------
     #
 
     majority_baseline = (
@@ -2085,7 +2646,9 @@ def main() -> None:
     )
 
     #
-    # Modelos.
+    # --------------------------------------------------------
+    # Models
+    # --------------------------------------------------------
     #
 
     models = build_models(
@@ -2162,8 +2725,28 @@ def main() -> None:
     )
 
     print(
+        "Eligibility source: "
+        f"{EXPECTED_ELIGIBILITY_VERSION}"
+    )
+
+    print(
+        "Price Quality source: "
+        f"{EXPECTED_PRICE_QUALITY_VERSION}"
+    )
+
+    print(
+        "Price History source: "
+        f"{EXPECTED_PRICE_HISTORY_VERSION}"
+    )
+
+    print(
         "Target semantics: "
         f"{EXPECTED_TARGET_RETURN_SEMANTICS}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS}"
     )
 
     print(
@@ -2173,6 +2756,11 @@ def main() -> None:
 
     print(
         "Os modelos foram treinados "
+        "exclusivamente no TRAIN."
+    )
+
+    print(
+        "Imputer e scaler foram ajustados "
         "exclusivamente no TRAIN."
     )
 
