@@ -11,6 +11,10 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
+# ============================================================
+# Paths
+# ============================================================
+
 SILVER_PRICES_BASE_DIR = (
     PROJECT_ROOT
     / "data"
@@ -41,15 +45,31 @@ OUTPUT_PATH = (
 )
 
 
-ADJUSTED_PRICES_VERSION = "v2"
+# ============================================================
+# Version / source
+# ============================================================
 
+ADJUSTED_PRICES_VERSION = "v3"
+
+ADJUSTED_PRICES_SOURCE = (
+    "SILVER_FII_DAILY_PRICES"
+)
+
+CORPORATE_ACTION_SOURCE = (
+    "FII_PRICE_DISCONTINUITIES_V5_REGISTRY_V2"
+)
+
+
+# ============================================================
+# Corporate Action contract
+# ============================================================
 
 STRUCTURAL_EVENT_TYPES = {
     "SPLIT",
     "REVERSE_SPLIT",
 }
 
-CASH_EVENT_TYPES = {
+ECONOMIC_EVENT_TYPES = {
     "AMORTIZATION",
 }
 
@@ -67,6 +87,21 @@ RAW_PRICE_COLUMNS = [
     "close_price",
 ]
 
+
+CORPORATE_ACTION_DATE_COLUMNS = [
+    "corporate_action_record_date",
+    "corporate_action_effective_date",
+    "cash_payment_date",
+    "in_kind_delivery_date",
+    "first_post_event_trade_date",
+    "confirmation_date",
+    "governance_review_date",
+]
+
+
+# ============================================================
+# Silver discovery
+# ============================================================
 
 def extract_partition_date(
     path: Path,
@@ -119,6 +154,10 @@ def find_all_silver_price_files(
     )
 
 
+# ============================================================
+# Silver loading / validation
+# ============================================================
+
 def validate_silver_partition_schema(
     dataframe: pd.DataFrame,
     source_path: Path,
@@ -164,7 +203,7 @@ def load_silver_prices(
     Carrega diretamente todas as partições
     Silver de preços.
 
-    Esta camada NÃO depende mais de
+    Esta camada NÃO depende de
     fii_price_history.
     """
 
@@ -288,50 +327,32 @@ def validate_silver_prices(
         .sum()
     )
 
-    invalid_close_prices = int(
-        (
-            dataframe[
-                "close_price"
-            ]
-            <= 0
-        ).sum()
-    )
+    invalid_prices = 0
+    non_finite_prices = 0
 
-    invalid_open_prices = int(
-        (
-            dataframe[
-                "open_price"
-            ]
-            <= 0
-        ).sum()
-    )
+    for column in RAW_PRICE_COLUMNS:
+        invalid_prices += int(
+            (
+                dataframe[
+                    column
+                ]
+                <= 0
+            ).sum()
+        )
 
-    invalid_low_prices = int(
-        (
-            dataframe[
-                "low_price"
-            ]
-            <= 0
-        ).sum()
-    )
-
-    invalid_high_prices = int(
-        (
-            dataframe[
-                "high_price"
-            ]
-            <= 0
-        ).sum()
-    )
-
-    invalid_average_prices = int(
-        (
-            dataframe[
-                "average_price"
-            ]
-            <= 0
-        ).sum()
-    )
+        non_finite_prices += int(
+            (
+                dataframe[
+                    column
+                ].notna()
+                &
+                ~np.isfinite(
+                    dataframe[
+                        column
+                    ]
+                )
+            ).sum()
+        )
 
     invalid_trades = int(
         (
@@ -378,28 +399,13 @@ def validate_silver_prices(
     )
 
     print(
-        f"close_price inválidos: "
-        f"{invalid_close_prices:,}"
+        f"Preços inválidos: "
+        f"{invalid_prices:,}"
     )
 
     print(
-        f"open_price inválidos: "
-        f"{invalid_open_prices:,}"
-    )
-
-    print(
-        f"low_price inválidos: "
-        f"{invalid_low_prices:,}"
-    )
-
-    print(
-        f"high_price inválidos: "
-        f"{invalid_high_prices:,}"
-    )
-
-    print(
-        f"average_price inválidos: "
-        f"{invalid_average_prices:,}"
+        f"Preços não finitos: "
+        f"{non_finite_prices:,}"
     )
 
     print(
@@ -418,29 +424,14 @@ def validate_silver_prices(
             "obrigatórios nulos."
         )
 
-    if invalid_close_prices > 0:
+    if invalid_prices > 0:
         raise ValueError(
-            "Silver possui close_price inválido."
+            "Silver possui preços inválidos."
         )
 
-    if invalid_open_prices > 0:
+    if non_finite_prices > 0:
         raise ValueError(
-            "Silver possui open_price inválido."
-        )
-
-    if invalid_low_prices > 0:
-        raise ValueError(
-            "Silver possui low_price inválido."
-        )
-
-    if invalid_high_prices > 0:
-        raise ValueError(
-            "Silver possui high_price inválido."
-        )
-
-    if invalid_average_prices > 0:
-        raise ValueError(
-            "Silver possui average_price inválido."
+            "Silver possui preços não finitos."
         )
 
     if invalid_trades > 0:
@@ -454,7 +445,16 @@ def validate_silver_prices(
     )
 
 
+# ============================================================
+# Price Discontinuities / Registry v2 payload
+# ============================================================
+
 def load_discontinuities() -> pd.DataFrame:
+    """
+    Carrega Price Discontinuities v5
+    contendo o payload do Registry v2.
+    """
+
     if not DISCONTINUITIES_PATH.exists():
         raise FileNotFoundError(
             "FII Price Discontinuities não encontrado: "
@@ -474,12 +474,31 @@ def load_discontinuities() -> pd.DataFrame:
         "event_date",
         "review_status",
         "event_type",
+        "confidence",
+
         "quantity_multiplier",
         "price_adjustment_factor",
+
         "cash_amount_per_unit",
+        "in_kind_amount_per_unit",
+        "total_economic_value_per_unit",
+        "in_kind_asset_ticker",
+        "in_kind_quantity_per_unit",
+
+        "corporate_action_record_date",
+        "corporate_action_effective_date",
+        "cash_payment_date",
+        "in_kind_delivery_date",
+        "first_post_event_trade_date",
+
         "confirmation_source",
         "confirmation_date",
+        "governance_review_date",
+
         "is_confirmed_corporate_action",
+
+        "discontinuity_version",
+        "discontinuity_source",
     ]
 
     missing_columns = [
@@ -491,7 +510,8 @@ def load_discontinuities() -> pd.DataFrame:
     if missing_columns:
         raise ValueError(
             "Price Discontinuities possui "
-            "schema incompatível."
+            "schema incompatível com "
+            "Registry v2."
             "\nColunas ausentes: "
             f"{missing_columns}"
         )
@@ -515,21 +535,154 @@ def load_discontinuities() -> pd.DataFrame:
         ]
     )
 
-    dataframe[
-        "confirmation_date"
-    ] = pd.to_datetime(
+    for column in (
+        CORPORATE_ACTION_DATE_COLUMNS
+    ):
         dataframe[
-            "confirmation_date"
-        ],
-        errors="coerce",
+            column
+        ] = pd.to_datetime(
+            dataframe[
+                column
+            ],
+            errors="coerce",
+        )
+
+    numeric_columns = [
+        "quantity_multiplier",
+        "price_adjustment_factor",
+        "cash_amount_per_unit",
+        "in_kind_amount_per_unit",
+        "total_economic_value_per_unit",
+        "in_kind_quantity_per_unit",
+    ]
+
+    for column in numeric_columns:
+        dataframe[
+            column
+        ] = pd.to_numeric(
+            dataframe[
+                column
+            ],
+            errors="coerce",
+        )
+
+    dataframe[
+        "in_kind_asset_ticker"
+    ] = (
+        dataframe[
+            "in_kind_asset_ticker"
+        ]
+        .astype("string")
+        .str.strip()
+        .str.upper()
     )
 
     return dataframe
 
 
+def validate_discontinuity_contract(
+    dataframe: pd.DataFrame,
+) -> None:
+    """
+    Garante que esta camada recebe a versão
+    de Price Discontinuities esperada.
+    """
+
+    invalid_version = int(
+        (
+            dataframe[
+                "discontinuity_version"
+            ]
+            != "v5"
+        ).sum()
+    )
+
+    invalid_source = int(
+        (
+            dataframe[
+                "discontinuity_source"
+            ]
+            != "SILVER_FII_DAILY_PRICES"
+        ).sum()
+    )
+
+    pending_count = int(
+        dataframe[
+            "review_status"
+        ]
+        .eq(
+            "PENDING_REVIEW"
+        )
+        .sum()
+    )
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Contrato - Price Discontinuities"
+    )
+    print(
+        "======================================"
+    )
+
+    print(
+        f"Eventos: "
+        f"{len(dataframe):,}"
+    )
+
+    print(
+        f"Versões inválidas: "
+        f"{invalid_version:,}"
+    )
+
+    print(
+        f"Sources inválidos: "
+        f"{invalid_source:,}"
+    )
+
+    print(
+        f"Eventos pendentes: "
+        f"{pending_count:,}"
+    )
+
+    if invalid_version > 0:
+        raise ValueError(
+            "Adjusted Prices v3 exige "
+            "Price Discontinuities v5."
+        )
+
+    if invalid_source > 0:
+        raise ValueError(
+            "Price Discontinuities possui "
+            "source incompatível."
+        )
+
+    if pending_count > 0:
+        raise ValueError(
+            "Adjusted Prices v3 não pode ser "
+            "construído enquanto existirem "
+            "Corporate Action candidates "
+            "PENDING_REVIEW."
+        )
+
+    print(
+        "\nContrato de entrada aprovado."
+    )
+
+
+# ============================================================
+# Confirmed Corporate Actions
+# ============================================================
+
 def get_confirmed_actions(
     discontinuities: pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Extrai somente Corporate Actions
+    explicitamente CONFIRMED pelo registry.
+    """
+
     confirmed = discontinuities[
         discontinuities[
             "is_confirmed_corporate_action"
@@ -551,7 +704,7 @@ def get_confirmed_actions(
 
     valid_types = (
         STRUCTURAL_EVENT_TYPES
-        | CASH_EVENT_TYPES
+        | ECONOMIC_EVENT_TYPES
     )
 
     unsupported_types = sorted(
@@ -566,8 +719,7 @@ def get_confirmed_actions(
     if unsupported_types:
         raise ValueError(
             "Corporate Actions confirmados "
-            "com event_type ainda não "
-            "suportado: "
+            "com event_type não suportado: "
             f"{unsupported_types}"
         )
 
@@ -586,6 +738,57 @@ def get_confirmed_actions(
             "duplicados por "
             "(ticker + event_date)."
         )
+
+    #
+    # --------------------------------------------------------
+    # Date semantics
+    # --------------------------------------------------------
+    #
+
+    missing_first_post_trade = (
+        confirmed[
+            "first_post_event_trade_date"
+        ]
+        .isna()
+    )
+
+    if missing_first_post_trade.any():
+        raise ValueError(
+            "Corporate Action CONFIRMED sem "
+            "first_post_event_trade_date."
+        )
+
+    event_date_mismatch = (
+        confirmed[
+            "event_date"
+        ]
+        != confirmed[
+            "first_post_event_trade_date"
+        ]
+    )
+
+    if event_date_mismatch.any():
+        invalid_rows = confirmed.loc[
+            event_date_mismatch,
+            [
+                "ticker",
+                "event_date",
+                "first_post_event_trade_date",
+            ],
+        ]
+
+        raise ValueError(
+            "Contrato atual exige "
+            "event_date == "
+            "first_post_event_trade_date:\n"
+            f"{invalid_rows.to_string(index=False)}"
+        )
+
+    #
+    # --------------------------------------------------------
+    # Structural events
+    # --------------------------------------------------------
+    #
 
     structural = confirmed[
         confirmed[
@@ -661,33 +864,189 @@ def get_confirmed_actions(
                 "não recíprocos."
             )
 
-    cash_events = confirmed[
+    #
+    # --------------------------------------------------------
+    # Economic events
+    # --------------------------------------------------------
+    #
+
+    economic_events = confirmed[
         confirmed[
             "event_type"
         ].isin(
-            CASH_EVENT_TYPES
+            ECONOMIC_EVENT_TYPES
         )
-    ]
+    ].copy()
 
-    if not cash_events.empty:
-        invalid_cash = (
-            cash_events[
-                "cash_amount_per_unit"
+    if not economic_events.empty:
+        invalid_total_value = (
+            economic_events[
+                "total_economic_value_per_unit"
             ].isna()
             |
             (
-                cash_events[
-                    "cash_amount_per_unit"
+                economic_events[
+                    "total_economic_value_per_unit"
                 ]
                 <= 0
             )
         )
 
-        if invalid_cash.any():
+        if invalid_total_value.any():
+            invalid_rows = (
+                economic_events.loc[
+                    invalid_total_value,
+                    [
+                        "ticker",
+                        "event_date",
+                        "total_economic_value_per_unit",
+                    ],
+                ]
+            )
+
             raise ValueError(
                 "AMORTIZATION confirmada sem "
-                "cash_amount_per_unit válido."
+                "total_economic_value_per_unit "
+                "válido:\n"
+                f"{invalid_rows.to_string(index=False)}"
             )
+
+        negative_cash = (
+            economic_events[
+                "cash_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            .lt(
+                0.0
+            )
+        )
+
+        if negative_cash.any():
+            raise ValueError(
+                "AMORTIZATION confirmada possui "
+                "cash_amount_per_unit negativo."
+            )
+
+        negative_in_kind = (
+            economic_events[
+                "in_kind_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            .lt(
+                0.0
+            )
+        )
+
+        if negative_in_kind.any():
+            raise ValueError(
+                "AMORTIZATION confirmada possui "
+                "in_kind_amount_per_unit negativo."
+            )
+
+        component_sum = (
+            economic_events[
+                "cash_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            .astype(float)
+            +
+            economic_events[
+                "in_kind_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            .astype(float)
+        )
+
+        total_value = (
+            economic_events[
+                "total_economic_value_per_unit"
+            ]
+            .astype(float)
+        )
+
+        component_mismatch = (
+            ~np.isclose(
+                component_sum,
+                total_value,
+                rtol=1e-8,
+                atol=1e-8,
+            )
+        )
+
+        if component_mismatch.any():
+            invalid_rows = (
+                economic_events.loc[
+                    component_mismatch,
+                    [
+                        "ticker",
+                        "event_date",
+                        "cash_amount_per_unit",
+                        "in_kind_amount_per_unit",
+                        "total_economic_value_per_unit",
+                    ],
+                ]
+            )
+
+            raise ValueError(
+                "Componentes econômicos não "
+                "fecham com o valor total:\n"
+                f"{invalid_rows.to_string(index=False)}"
+            )
+
+        in_kind_events = economic_events[
+            economic_events[
+                "in_kind_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            .gt(
+                0.0
+            )
+        ]
+
+        if not in_kind_events.empty:
+            missing_asset = (
+                in_kind_events[
+                    "in_kind_asset_ticker"
+                ]
+                .isna()
+            )
+
+            if missing_asset.any():
+                raise ValueError(
+                    "Evento in-kind confirmado "
+                    "sem in_kind_asset_ticker."
+                )
+
+            invalid_in_kind_quantity = (
+                in_kind_events[
+                    "in_kind_quantity_per_unit"
+                ]
+                .isna()
+                |
+                (
+                    in_kind_events[
+                        "in_kind_quantity_per_unit"
+                    ]
+                    <= 0
+                )
+            )
+
+            if invalid_in_kind_quantity.any():
+                raise ValueError(
+                    "Evento in-kind confirmado "
+                    "sem in_kind_quantity_per_unit "
+                    "válido."
+                )
 
     print(
         "\n======================================"
@@ -704,12 +1063,43 @@ def get_confirmed_actions(
         f"{len(confirmed):,}"
     )
 
+    print(
+        f"Structural events: "
+        f"{len(structural):,}"
+    )
+
+    print(
+        f"Economic events: "
+        f"{len(economic_events):,}"
+    )
+
+    in_kind_count = int(
+        (
+            economic_events[
+                "in_kind_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            > 0
+        ).sum()
+    )
+
+    print(
+        "Eventos com componente in-kind: "
+        f"{in_kind_count:,}"
+    )
+
     if confirmed.empty:
         print(
             "Nenhum Corporate Action confirmado."
         )
 
         return confirmed
+
+    print(
+        "\nEvent Types:"
+    )
 
     for event_type, count in (
         confirmed[
@@ -726,10 +1116,23 @@ def get_confirmed_actions(
     return confirmed
 
 
+# ============================================================
+# Event date availability
+# ============================================================
+
 def validate_event_dates(
     silver_prices: pd.DataFrame,
     confirmed_actions: pd.DataFrame,
 ) -> None:
+    """
+    event_date representa atualmente
+    first_post_event_trade_date.
+
+    Portanto todo evento confirmado precisa
+    possuir observação Silver exatamente
+    nessa chave.
+    """
+
     if confirmed_actions.empty:
         return
 
@@ -757,9 +1160,15 @@ def validate_event_dates(
         if key not in available_keys:
             missing_events.append(
                 {
-                    "ticker": row.ticker,
-                    "event_date": row.event_date,
-                    "event_type": row.event_type,
+                    "ticker": (
+                        row.ticker
+                    ),
+                    "event_date": (
+                        row.event_date
+                    ),
+                    "event_type": (
+                        row.event_type
+                    ),
                 }
             )
 
@@ -771,10 +1180,14 @@ def validate_event_dates(
         raise ValueError(
             "Corporate Action confirmado "
             "sem preço Silver disponível "
-            "na event_date:\n"
+            "na first_post_event_trade_date:\n"
             f"{missing_dataframe.to_string(index=False)}"
         )
 
+
+# ============================================================
+# Structural adjustment
+# ============================================================
 
 def build_structural_adjustment_factor(
     silver_prices: pd.DataFrame,
@@ -783,13 +1196,16 @@ def build_structural_adjustment_factor(
     """
     Constrói fator estrutural retroativo.
 
-    SPLIT com fator 0.10 em D:
+    Exemplo:
 
-    datas < D
-        factor *= 0.10
+    SPLIT 1:10 com factor=0.10 em D
 
-    datas >= D
-        o preço bruto já está na nova escala.
+        datas < D:
+            factor *= 0.10
+
+        datas >= D:
+            o preço bruto já está
+            na nova escala.
 
     Múltiplos eventos futuros são
     multiplicados retroativamente.
@@ -801,25 +1217,25 @@ def build_structural_adjustment_factor(
         "structural_adjustment_factor"
     ] = 1.0
 
-    structural_actions = confirmed_actions[
-        confirmed_actions[
-            "event_type"
-        ].isin(
-            STRUCTURAL_EVENT_TYPES
-        )
-    ].copy()
-
-    if structural_actions.empty:
-        return result
-
     structural_actions = (
-        structural_actions.sort_values(
+        confirmed_actions[
+            confirmed_actions[
+                "event_type"
+            ].isin(
+                STRUCTURAL_EVENT_TYPES
+            )
+        ]
+        .copy()
+        .sort_values(
             [
                 "ticker",
                 "event_date",
             ]
         )
     )
+
+    if structural_actions.empty:
+        return result
 
     for action in (
         structural_actions.itertuples(
@@ -856,12 +1272,32 @@ def build_structural_adjustment_factor(
     return result
 
 
+# ============================================================
+# Attach governance/event information
+# ============================================================
+
 def attach_event_information(
     dataframe: pd.DataFrame,
     discontinuities: pd.DataFrame,
     confirmed_actions: pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Adiciona:
+
+    1. informação de qualquer
+       descontinuidade detectada;
+
+    2. payload governado somente das
+       Corporate Actions confirmadas.
+    """
+
     result = dataframe.copy()
+
+    #
+    # --------------------------------------------------------
+    # Detector information
+    # --------------------------------------------------------
+    #
 
     event_columns = [
         "ticker",
@@ -872,21 +1308,12 @@ def attach_event_information(
         "is_confirmed_corporate_action",
     ]
 
-    available_event_columns = [
-        column
-        for column in event_columns
-        if column in discontinuities.columns
-    ]
-
     event_information = (
         discontinuities[
-            available_event_columns
+            event_columns
         ]
         .copy()
-    )
-
-    event_information = (
-        event_information.rename(
+        .rename(
             columns={
                 "event_date": (
                     "trade_date"
@@ -967,43 +1394,97 @@ def attach_event_information(
         == "PENDING_REVIEW"
     )
 
-    action_payload = confirmed_actions[
-        [
-            "ticker",
-            "event_date",
-            "event_type",
-            "quantity_multiplier",
-            "price_adjustment_factor",
-            "cash_amount_per_unit",
-            "confirmation_source",
-            "confirmation_date",
-        ]
-    ].copy()
+    #
+    # --------------------------------------------------------
+    # Governed Corporate Action payload
+    # --------------------------------------------------------
+    #
 
-    action_payload = action_payload.rename(
-        columns={
-            "event_date": (
-                "trade_date"
-            ),
-            "event_type": (
-                "confirmed_event_type"
-            ),
-            "quantity_multiplier": (
-                "confirmed_quantity_multiplier"
-            ),
-            "price_adjustment_factor": (
-                "confirmed_price_adjustment_factor"
-            ),
-            "cash_amount_per_unit": (
-                "confirmed_cash_amount_per_unit"
-            ),
-            "confirmation_source": (
-                "confirmed_action_source"
-            ),
-            "confirmation_date": (
-                "confirmed_action_confirmation_date"
-            ),
-        }
+    action_payload_columns = [
+        "ticker",
+        "event_date",
+        "event_type",
+
+        "quantity_multiplier",
+        "price_adjustment_factor",
+
+        "cash_amount_per_unit",
+        "in_kind_amount_per_unit",
+        "total_economic_value_per_unit",
+        "in_kind_asset_ticker",
+        "in_kind_quantity_per_unit",
+
+        "corporate_action_record_date",
+        "corporate_action_effective_date",
+        "cash_payment_date",
+        "in_kind_delivery_date",
+        "first_post_event_trade_date",
+
+        "confirmation_source",
+        "confirmation_date",
+        "governance_review_date",
+    ]
+
+    action_payload = (
+        confirmed_actions[
+            action_payload_columns
+        ]
+        .copy()
+        .rename(
+            columns={
+                "event_date": (
+                    "trade_date"
+                ),
+                "event_type": (
+                    "confirmed_event_type"
+                ),
+                "quantity_multiplier": (
+                    "confirmed_quantity_multiplier"
+                ),
+                "price_adjustment_factor": (
+                    "confirmed_price_adjustment_factor"
+                ),
+                "cash_amount_per_unit": (
+                    "confirmed_cash_amount_per_unit"
+                ),
+                "in_kind_amount_per_unit": (
+                    "confirmed_in_kind_amount_per_unit"
+                ),
+                "total_economic_value_per_unit": (
+                    "confirmed_total_economic_value_per_unit"
+                ),
+                "in_kind_asset_ticker": (
+                    "confirmed_in_kind_asset_ticker"
+                ),
+                "in_kind_quantity_per_unit": (
+                    "confirmed_in_kind_quantity_per_unit"
+                ),
+                "corporate_action_record_date": (
+                    "confirmed_corporate_action_record_date"
+                ),
+                "corporate_action_effective_date": (
+                    "confirmed_corporate_action_effective_date"
+                ),
+                "cash_payment_date": (
+                    "confirmed_cash_payment_date"
+                ),
+                "in_kind_delivery_date": (
+                    "confirmed_in_kind_delivery_date"
+                ),
+                "first_post_event_trade_date": (
+                    "confirmed_first_post_event_trade_date"
+                ),
+                "confirmation_source": (
+                    "confirmed_action_source"
+                ),
+                "confirmation_date": (
+                    "confirmed_action_confirmation_date"
+                ),
+                "governance_review_date": (
+                    "confirmed_governance_review_date"
+                ),
+            }
+        )
     )
 
     result = result.merge(
@@ -1019,6 +1500,10 @@ def attach_event_information(
     return result
 
 
+# ============================================================
+# Adjusted prices / economic components
+# ============================================================
+
 def calculate_adjusted_prices(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -1028,9 +1513,24 @@ def calculate_adjusted_prices(
 
     Todos os OHLC/average usam o mesmo
     structural_adjustment_factor.
+
+    v3:
+        cash != total economic value
+
+    Portanto mantemos separadamente:
+
+        cash component
+        in-kind component
+        total corporate-action value
     """
 
     result = dataframe.copy()
+
+    #
+    # --------------------------------------------------------
+    # Raw + structural adjusted prices
+    # --------------------------------------------------------
+    #
 
     for column in RAW_PRICE_COLUMNS:
         raw_column = (
@@ -1060,8 +1560,14 @@ def calculate_adjusted_prices(
             ]
         )
 
+    #
+    # --------------------------------------------------------
+    # Economic components
+    # --------------------------------------------------------
+    #
+
     result[
-        "cash_flow_per_unit_raw"
+        "cash_amount_per_unit_raw"
     ] = (
         result[
             "confirmed_cash_amount_per_unit"
@@ -1074,27 +1580,123 @@ def calculate_adjusted_prices(
         )
     )
 
-    #
-    # Cash flow e preço precisam ficar
-    # na mesma base estrutural.
-    #
     result[
-        "cash_flow_per_unit_adjusted"
+        "in_kind_amount_per_unit_raw"
     ] = (
         result[
-            "cash_flow_per_unit_raw"
+            "confirmed_in_kind_amount_per_unit"
+        ]
+        .fillna(
+            0.0
+        )
+        .astype(
+            float
+        )
+    )
+
+    result[
+        "corporate_action_value_per_unit_raw"
+    ] = (
+        result[
+            "confirmed_total_economic_value_per_unit"
+        ]
+        .fillna(
+            0.0
+        )
+        .astype(
+            float
+        )
+    )
+
+    #
+    # O valor econômico e seus componentes
+    # precisam ficar na mesma escala dos
+    # preços estruturalmente ajustados.
+    #
+
+    result[
+        "cash_amount_per_unit_adjusted"
+    ] = (
+        result[
+            "cash_amount_per_unit_raw"
         ]
         * result[
             "structural_adjustment_factor"
         ]
     )
 
+    result[
+        "in_kind_amount_per_unit_adjusted"
+    ] = (
+        result[
+            "in_kind_amount_per_unit_raw"
+        ]
+        * result[
+            "structural_adjustment_factor"
+        ]
+    )
+
+    result[
+        "corporate_action_value_per_unit_adjusted"
+    ] = (
+        result[
+            "corporate_action_value_per_unit_raw"
+        ]
+        * result[
+            "structural_adjustment_factor"
+        ]
+    )
+
+    #
+    # --------------------------------------------------------
+    # Legacy aliases
+    # --------------------------------------------------------
+    #
+    # Agora estes campos significam
+    # APENAS caixa real.
+    #
+    # Eles são preservados temporariamente
+    # para facilitar migração downstream.
+    #
+
+    result[
+        "cash_flow_per_unit_raw"
+    ] = result[
+        "cash_amount_per_unit_raw"
+    ]
+
+    result[
+        "cash_flow_per_unit_adjusted"
+    ] = result[
+        "cash_amount_per_unit_adjusted"
+    ]
+
     return result
 
+
+# ============================================================
+# Returns
+# ============================================================
 
 def calculate_returns(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Calcula três retornos distintos:
+
+    daily_return_raw
+        movimento bruto da B3
+
+    daily_return_adjusted_price
+        movimento após correção apenas
+        de escala estrutural
+
+    daily_return_economic
+        retorno econômico incluindo
+        TOTAL economic value da Corporate
+        Action, seja cash ou in-kind
+    """
+
     result = dataframe.sort_values(
         [
             "ticker",
@@ -1137,7 +1739,7 @@ def calculate_returns(
         / result[
             "previous_close_price_raw"
         ]
-        - 1
+        - 1.0
     )
 
     result[
@@ -1149,7 +1751,7 @@ def calculate_returns(
         / result[
             "previous_close_price_adjusted"
         ]
-        - 1
+        - 1.0
     )
 
     result[
@@ -1159,18 +1761,23 @@ def calculate_returns(
             result[
                 "close_price_adjusted"
             ]
-            + result[
-                "cash_flow_per_unit_adjusted"
+            +
+            result[
+                "corporate_action_value_per_unit_adjusted"
             ]
         )
         / result[
             "previous_close_price_adjusted"
         ]
-        - 1
+        - 1.0
     )
 
     return result
 
+
+# ============================================================
+# Metadata
+# ============================================================
 
 def add_metadata(
     dataframe: pd.DataFrame,
@@ -1186,7 +1793,13 @@ def add_metadata(
     result[
         "adjusted_prices_source"
     ] = (
-        "SILVER_FII_DAILY_PRICES"
+        ADJUSTED_PRICES_SOURCE
+    )
+
+    result[
+        "corporate_action_source"
+    ] = (
+        CORPORATE_ACTION_SOURCE
     )
 
     result[
@@ -1198,10 +1811,18 @@ def add_metadata(
     return result
 
 
+# ============================================================
+# Output validation
+# ============================================================
+
 def validate_adjusted_output(
     dataframe: pd.DataFrame,
     confirmed_actions: pd.DataFrame,
 ) -> None:
+    """
+    Data Quality forte do Adjusted Prices v3.
+    """
+
     required_columns = [
         "trade_date",
         "ticker",
@@ -1224,6 +1845,15 @@ def validate_adjusted_output(
         "average_price_adjusted",
         "close_price_adjusted",
 
+        "cash_amount_per_unit_raw",
+        "cash_amount_per_unit_adjusted",
+
+        "in_kind_amount_per_unit_raw",
+        "in_kind_amount_per_unit_adjusted",
+
+        "corporate_action_value_per_unit_raw",
+        "corporate_action_value_per_unit_adjusted",
+
         "cash_flow_per_unit_raw",
         "cash_flow_per_unit_adjusted",
 
@@ -1237,6 +1867,7 @@ def validate_adjusted_output(
 
         "adjusted_prices_version",
         "adjusted_prices_source",
+        "corporate_action_source",
     ]
 
     missing_columns = [
@@ -1281,9 +1912,63 @@ def validate_adjusted_output(
     negative_cash = int(
         (
             dataframe[
-                "cash_flow_per_unit_raw"
+                "cash_amount_per_unit_raw"
             ]
             < 0
+        ).sum()
+    )
+
+    negative_in_kind = int(
+        (
+            dataframe[
+                "in_kind_amount_per_unit_raw"
+            ]
+            < 0
+        ).sum()
+    )
+
+    negative_total_value = int(
+        (
+            dataframe[
+                "corporate_action_value_per_unit_raw"
+            ]
+            < 0
+        ).sum()
+    )
+
+    component_sum_mismatch = int(
+        (
+            ~np.isclose(
+                (
+                    dataframe[
+                        "cash_amount_per_unit_raw"
+                    ]
+                    +
+                    dataframe[
+                        "in_kind_amount_per_unit_raw"
+                    ]
+                ),
+                dataframe[
+                    "corporate_action_value_per_unit_raw"
+                ],
+                rtol=1e-8,
+                atol=1e-8,
+            )
+        ).sum()
+    )
+
+    legacy_cash_alias_mismatch = int(
+        (
+            ~np.isclose(
+                dataframe[
+                    "cash_flow_per_unit_raw"
+                ],
+                dataframe[
+                    "cash_amount_per_unit_raw"
+                ],
+                rtol=0.0,
+                atol=1e-12,
+            )
         ).sum()
     )
 
@@ -1343,6 +2028,62 @@ def validate_adjusted_output(
         confirmed_actions
     )
 
+    expected_structural_count = int(
+        confirmed_actions[
+            "event_type"
+        ]
+        .isin(
+            STRUCTURAL_EVENT_TYPES
+        )
+        .sum()
+    )
+
+    expected_economic_count = int(
+        confirmed_actions[
+            "event_type"
+        ]
+        .isin(
+            ECONOMIC_EVENT_TYPES
+        )
+        .sum()
+    )
+
+    expected_in_kind_count = int(
+        (
+            confirmed_actions[
+                "in_kind_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            > 0
+        ).sum()
+    )
+
+    applied_economic_count = int(
+        (
+            dataframe[
+                "corporate_action_value_per_unit_raw"
+            ]
+            > 0
+        ).sum()
+    )
+
+    applied_in_kind_count = int(
+        (
+            dataframe[
+                "in_kind_amount_per_unit_raw"
+            ]
+            > 0
+        ).sum()
+    )
+
+    pending_count = int(
+        dataframe[
+            "pending_review_on_date"
+        ].sum()
+    )
+
     non_finite_raw_return = int(
         (
             dataframe[
@@ -1385,11 +2126,38 @@ def validate_adjusted_output(
         ).sum()
     )
 
+    invalid_version = int(
+        (
+            dataframe[
+                "adjusted_prices_version"
+            ]
+            != ADJUSTED_PRICES_VERSION
+        ).sum()
+    )
+
+    invalid_source = int(
+        (
+            dataframe[
+                "adjusted_prices_source"
+            ]
+            != ADJUSTED_PRICES_SOURCE
+        ).sum()
+    )
+
+    invalid_ca_source = int(
+        (
+            dataframe[
+                "corporate_action_source"
+            ]
+            != CORPORATE_ACTION_SOURCE
+        ).sum()
+    )
+
     print(
         "\n======================================"
     )
     print(
-        "Data Quality - Adjusted Prices"
+        "Data Quality - Adjusted Prices v3"
     )
     print(
         "======================================"
@@ -1436,8 +2204,28 @@ def validate_adjusted_output(
     )
 
     print(
-        f"Cash flows negativos: "
+        f"Cash values negativos: "
         f"{negative_cash:,}"
+    )
+
+    print(
+        f"In-kind values negativos: "
+        f"{negative_in_kind:,}"
+    )
+
+    print(
+        "Corporate Action values negativos: "
+        f"{negative_total_value:,}"
+    )
+
+    print(
+        "Mismatch cash + in-kind != total: "
+        f"{component_sum_mismatch:,}"
+    )
+
+    print(
+        "Mismatch legacy cash alias: "
+        f"{legacy_cash_alias_mismatch:,}"
     )
 
     print(
@@ -1452,12 +2240,14 @@ def validate_adjusted_output(
 
     print(
         "daily_return_adjusted_price "
-        f"não finitos: {non_finite_adjusted_return:,}"
+        f"não finitos: "
+        f"{non_finite_adjusted_return:,}"
     )
 
     print(
         "daily_return_economic "
-        f"não finitos: {non_finite_economic_return:,}"
+        f"não finitos: "
+        f"{non_finite_economic_return:,}"
     )
 
     print(
@@ -1468,6 +2258,36 @@ def validate_adjusted_output(
     print(
         "Corporate Actions esperados: "
         f"{expected_confirmed_count:,}"
+    )
+
+    print(
+        "Structural events esperados: "
+        f"{expected_structural_count:,}"
+    )
+
+    print(
+        "Economic events aplicados: "
+        f"{applied_economic_count:,}"
+    )
+
+    print(
+        "Economic events esperados: "
+        f"{expected_economic_count:,}"
+    )
+
+    print(
+        "Eventos in-kind aplicados: "
+        f"{applied_in_kind_count:,}"
+    )
+
+    print(
+        "Eventos in-kind esperados: "
+        f"{expected_in_kind_count:,}"
+    )
+
+    print(
+        f"Pendentes de review: "
+        f"{pending_count:,}"
     )
 
     if duplicate_count > 0:
@@ -1500,7 +2320,30 @@ def validate_adjusted_output(
 
     if negative_cash > 0:
         raise ValueError(
-            "Saída possui cash flow negativo."
+            "Saída possui cash negativo."
+        )
+
+    if negative_in_kind > 0:
+        raise ValueError(
+            "Saída possui in-kind negativo."
+        )
+
+    if negative_total_value > 0:
+        raise ValueError(
+            "Saída possui Corporate Action "
+            "value negativo."
+        )
+
+    if component_sum_mismatch > 0:
+        raise ValueError(
+            "cash + in-kind diverge do "
+            "total economic value."
+        )
+
+    if legacy_cash_alias_mismatch > 0:
+        raise ValueError(
+            "Legacy cash_flow alias não "
+            "representa cash puro."
         )
 
     if raw_preservation_error > 0:
@@ -1537,10 +2380,53 @@ def validate_adjusted_output(
             "confirmada."
         )
 
+    if (
+        applied_economic_count
+        != expected_economic_count
+    ):
+        raise ValueError(
+            "Quantidade de eventos econômicos "
+            "aplicados diverge da esperada."
+        )
+
+    if (
+        applied_in_kind_count
+        != expected_in_kind_count
+    ):
+        raise ValueError(
+            "Quantidade de eventos in-kind "
+            "aplicados diverge da esperada."
+        )
+
+    if pending_count > 0:
+        raise ValueError(
+            "Adjusted Prices v3 possui "
+            "eventos ainda pendentes."
+        )
+
+    if invalid_version > 0:
+        raise ValueError(
+            "adjusted_prices_version inválida."
+        )
+
+    if invalid_source > 0:
+        raise ValueError(
+            "adjusted_prices_source inválida."
+        )
+
+    if invalid_ca_source > 0:
+        raise ValueError(
+            "corporate_action_source inválida."
+        )
+
     print(
         "\nData Quality aprovada."
     )
 
+
+# ============================================================
+# Structural behavior validation
+# ============================================================
 
 def validate_split_behavior(
     dataframe: pd.DataFrame,
@@ -1641,26 +2527,39 @@ def validate_split_behavior(
         )
 
 
-def validate_amortization_behavior(
+# ============================================================
+# Economic event validation
+# ============================================================
+
+def validate_economic_event_behavior(
     dataframe: pd.DataFrame,
     confirmed_actions: pd.DataFrame,
 ) -> None:
-    amortizations = confirmed_actions[
+    """
+    Mostra explicitamente o efeito econômico
+    das amortizações.
+
+    Esta validação é importante porque v3
+    deixa de assumir que todo valor econômico
+    é caixa.
+    """
+
+    economic_events = confirmed_actions[
         confirmed_actions[
             "event_type"
-        ].eq(
-            "AMORTIZATION"
+        ].isin(
+            ECONOMIC_EVENT_TYPES
         )
     ]
 
-    if amortizations.empty:
+    if economic_events.empty:
         return
 
     print(
         "\n======================================"
     )
     print(
-        "Validação - AMORTIZATION"
+        "Validação - Economic Corporate Actions"
     )
     print(
         "======================================"
@@ -1669,7 +2568,7 @@ def validate_amortization_behavior(
     failures = []
 
     for action in (
-        amortizations.itertuples(
+        economic_events.itertuples(
             index=False
         )
     ):
@@ -1700,6 +2599,24 @@ def validate_amortization_behavior(
 
         event_row = event_row.iloc[0]
 
+        cash = float(
+            event_row[
+                "cash_amount_per_unit_raw"
+            ]
+        )
+
+        in_kind = float(
+            event_row[
+                "in_kind_amount_per_unit_raw"
+            ]
+        )
+
+        total_value = float(
+            event_row[
+                "corporate_action_value_per_unit_raw"
+            ]
+        )
+
         raw_return = event_row[
             "daily_return_raw"
         ]
@@ -1712,19 +2629,41 @@ def validate_amortization_behavior(
             "daily_return_economic"
         ]
 
-        cash = event_row[
-            "cash_flow_per_unit_raw"
-        ]
-
         print(
             f"{action.ticker} | "
             f"{action.event_date.date()}"
         )
 
         print(
-            f"  Cash amount: "
+            f"  Event type: "
+            f"{action.event_type}"
+        )
+
+        print(
+            f"  Cash component: "
             f"{cash:.9f}"
         )
+
+        print(
+            f"  In-kind component: "
+            f"{in_kind:.9f}"
+        )
+
+        print(
+            f"  Total economic value: "
+            f"{total_value:.9f}"
+        )
+
+        if in_kind > 0:
+            print(
+                "  In-kind asset: "
+                f"{action.in_kind_asset_ticker}"
+            )
+
+            print(
+                "  In-kind quantity/unit: "
+                f"{action.in_kind_quantity_per_unit:.9f}"
+            )
 
         print(
             f"  RAW return: "
@@ -1743,11 +2682,179 @@ def validate_amortization_behavior(
 
     if failures:
         raise ValueError(
-            "Falha na validação "
-            "de amortizações: "
+            "Falha na validação de "
+            "Corporate Actions econômicos: "
             f"{failures}"
         )
 
+
+# ============================================================
+# VIUR11 regression check
+# ============================================================
+
+def validate_viur11_semantics(
+    dataframe: pd.DataFrame,
+    confirmed_actions: pd.DataFrame,
+) -> None:
+    """
+    Regression check específico para o
+    evento que motivou a evolução v2 -> v3.
+
+    VIUR11 não pode voltar a ser modelado
+    como 100% cash.
+    """
+
+    viur_actions = confirmed_actions[
+        confirmed_actions[
+            "ticker"
+        ].eq(
+            "VIUR11"
+        )
+        &
+        confirmed_actions[
+            "event_type"
+        ].eq(
+            "AMORTIZATION"
+        )
+    ]
+
+    print(
+        "\n======================================"
+    )
+    print(
+        "Regression Check - VIUR11 in-kind"
+    )
+    print(
+        "======================================"
+    )
+
+    if viur_actions.empty:
+        print(
+            "Nenhum evento VIUR11 confirmado."
+        )
+
+        return
+
+    if len(viur_actions) != 1:
+        raise ValueError(
+            "Quantidade inesperada de eventos "
+            "VIUR11 confirmados."
+        )
+
+    action = viur_actions.iloc[0]
+
+    event_row = dataframe[
+        dataframe[
+            "ticker"
+        ].eq(
+            "VIUR11"
+        )
+        &
+        dataframe[
+            "trade_date"
+        ].eq(
+            action[
+                "event_date"
+            ]
+        )
+    ]
+
+    if len(event_row) != 1:
+        raise ValueError(
+            "VIUR11 não possui exatamente "
+            "uma linha na event_date."
+        )
+
+    event_row = event_row.iloc[0]
+
+    cash = float(
+        event_row[
+            "cash_amount_per_unit_raw"
+        ]
+    )
+
+    in_kind = float(
+        event_row[
+            "in_kind_amount_per_unit_raw"
+        ]
+    )
+
+    total_value = float(
+        event_row[
+            "corporate_action_value_per_unit_raw"
+        ]
+    )
+
+    asset_ticker = event_row[
+        "confirmed_in_kind_asset_ticker"
+    ]
+
+    quantity = event_row[
+        "confirmed_in_kind_quantity_per_unit"
+    ]
+
+    print(
+        f"Cash: "
+        f"{cash:.9f}"
+    )
+
+    print(
+        f"In-kind: "
+        f"{in_kind:.9f}"
+    )
+
+    print(
+        f"Total economic value: "
+        f"{total_value:.9f}"
+    )
+
+    print(
+        f"In-kind asset: "
+        f"{asset_ticker}"
+    )
+
+    print(
+        "In-kind quantity per VIUR11: "
+        f"{quantity:.9f}"
+    )
+
+    if cash <= 0:
+        raise ValueError(
+            "VIUR11 deveria possuir "
+            "componente cash positivo."
+        )
+
+    if in_kind <= 0:
+        raise ValueError(
+            "VIUR11 deveria possuir "
+            "componente in-kind positivo."
+        )
+
+    if asset_ticker != "TRXF11":
+        raise ValueError(
+            "VIUR11 deveria possuir "
+            "TRXF11 como ativo in-kind."
+        )
+
+    if not np.isclose(
+        cash + in_kind,
+        total_value,
+        rtol=1e-8,
+        atol=1e-8,
+    ):
+        raise ValueError(
+            "VIUR11 possui componentes "
+            "econômicos inconsistentes."
+        )
+
+    print(
+        "\nSemântica VIUR11 aprovada."
+    )
+
+
+# ============================================================
+# Summary
+# ============================================================
 
 def print_summary(
     dataframe: pd.DataFrame,
@@ -1768,7 +2875,25 @@ def print_summary(
     cash_rows = int(
         (
             dataframe[
-                "cash_flow_per_unit_raw"
+                "cash_amount_per_unit_raw"
+            ]
+            > 0
+        ).sum()
+    )
+
+    in_kind_rows = int(
+        (
+            dataframe[
+                "in_kind_amount_per_unit_raw"
+            ]
+            > 0
+        ).sum()
+    )
+
+    economic_rows = int(
+        (
+            dataframe[
+                "corporate_action_value_per_unit_raw"
             ]
             > 0
         ).sum()
@@ -1778,6 +2903,26 @@ def print_summary(
         dataframe[
             "pending_review_on_date"
         ].sum()
+    )
+
+    structural_actions = int(
+        confirmed_actions[
+            "event_type"
+        ]
+        .isin(
+            STRUCTURAL_EVENT_TYPES
+        )
+        .sum()
+    )
+
+    economic_actions = int(
+        confirmed_actions[
+            "event_type"
+        ]
+        .isin(
+            ECONOMIC_EVENT_TYPES
+        )
+        .sum()
     )
 
     print(
@@ -1797,8 +2942,13 @@ def print_summary(
     )
 
     print(
-        "Source: "
-        "SILVER_FII_DAILY_PRICES"
+        f"Source: "
+        f"{ADJUSTED_PRICES_SOURCE}"
+    )
+
+    print(
+        "Corporate Action Source: "
+        f"{CORPORATE_ACTION_SOURCE}"
     )
 
     print(
@@ -1827,14 +2977,34 @@ def print_summary(
     )
 
     print(
-        "Linhas historicamente "
-        "ajustadas por fator estrutural: "
+        "Structural Corporate Actions: "
+        f"{structural_actions:,}"
+    )
+
+    print(
+        "Economic Corporate Actions: "
+        f"{economic_actions:,}"
+    )
+
+    print(
+        "Linhas historicamente ajustadas "
+        "por fator estrutural: "
         f"{structural_rows:,}"
     )
 
     print(
-        "Linhas com cash flow "
-        f"corporativo: {cash_rows:,}"
+        "Linhas com componente cash: "
+        f"{cash_rows:,}"
+    )
+
+    print(
+        "Linhas com componente in-kind: "
+        f"{in_kind_rows:,}"
+    )
+
+    print(
+        "Linhas com valor econômico "
+        f"corporativo: {economic_rows:,}"
     )
 
     print(
@@ -1862,9 +3032,18 @@ def print_summary(
     )
 
 
+# ============================================================
+# Output contract
+# ============================================================
+
 def select_output_columns(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Define contrato físico do Adjusted
+    Prices v3.
+    """
+
     columns = [
         "trade_date",
         "ticker",
@@ -1888,6 +3067,22 @@ def select_output_columns(
 
         "trades_quantity",
 
+        #
+        # Economic components v3
+        #
+        "cash_amount_per_unit_raw",
+        "cash_amount_per_unit_adjusted",
+
+        "in_kind_amount_per_unit_raw",
+        "in_kind_amount_per_unit_adjusted",
+
+        "corporate_action_value_per_unit_raw",
+        "corporate_action_value_per_unit_adjusted",
+
+        #
+        # Legacy aliases:
+        # cash only
+        #
         "cash_flow_per_unit_raw",
         "cash_flow_per_unit_adjusted",
 
@@ -1898,6 +3093,9 @@ def select_output_columns(
         "daily_return_adjusted_price",
         "daily_return_economic",
 
+        #
+        # Detector information
+        #
         "review_status_on_date",
         "event_type_on_date",
         "discontinuity_confidence_on_date",
@@ -1905,18 +3103,42 @@ def select_output_columns(
         "confirmed_action_on_date",
         "pending_review_on_date",
 
+        #
+        # Governed action payload
+        #
         "confirmed_event_type",
         "confirmed_quantity_multiplier",
         "confirmed_price_adjustment_factor",
+
         "confirmed_cash_amount_per_unit",
+        "confirmed_in_kind_amount_per_unit",
+        "confirmed_total_economic_value_per_unit",
+
+        "confirmed_in_kind_asset_ticker",
+        "confirmed_in_kind_quantity_per_unit",
+
+        "confirmed_corporate_action_record_date",
+        "confirmed_corporate_action_effective_date",
+        "confirmed_cash_payment_date",
+        "confirmed_in_kind_delivery_date",
+        "confirmed_first_post_event_trade_date",
+
         "confirmed_action_source",
         "confirmed_action_confirmation_date",
+        "confirmed_governance_review_date",
 
+        #
+        # Market identity / evidence
+        #
         "ticker_resolution_status",
         "market_evidence_confidence",
 
+        #
+        # Metadata
+        #
         "adjusted_prices_version",
         "adjusted_prices_source",
+        "corporate_action_source",
         "created_at",
     ]
 
@@ -1924,6 +3146,10 @@ def select_output_columns(
         columns
     ].copy()
 
+
+# ============================================================
+# Main
+# ============================================================
 
 def main() -> None:
     print(
@@ -1937,8 +3163,13 @@ def main() -> None:
     )
 
     print(
-        "Source: "
-        "SILVER_FII_DAILY_PRICES"
+        f"Source: "
+        f"{ADJUSTED_PRICES_SOURCE}"
+    )
+
+    print(
+        "Corporate Action Source: "
+        f"{CORPORATE_ACTION_SOURCE}"
     )
 
     silver_files = (
@@ -1962,6 +3193,10 @@ def main() -> None:
 
     discontinuities = (
         load_discontinuities()
+    )
+
+    validate_discontinuity_contract(
+        discontinuities
     )
 
     confirmed_actions = (
@@ -2010,7 +3245,12 @@ def main() -> None:
         confirmed_actions=confirmed_actions,
     )
 
-    validate_amortization_behavior(
+    validate_economic_event_behavior(
+        dataframe=adjusted,
+        confirmed_actions=confirmed_actions,
+    )
+
+    validate_viur11_semantics(
         dataframe=adjusted,
         confirmed_actions=confirmed_actions,
     )
@@ -2042,13 +3282,14 @@ def main() -> None:
     )
 
     print(
-        "A fonte desta versão é diretamente "
+        "Adjusted Prices v3 usa diretamente "
         "a Silver FII Daily Prices."
     )
 
     print(
-        "Nenhuma dependência de "
-        "FII Price History permanece."
+        "Corporate Actions vêm de "
+        "Price Discontinuities v5 "
+        "com Registry v2."
     )
 
     print(
@@ -2066,13 +3307,34 @@ def main() -> None:
     )
 
     print(
-        "AMORTIZATION entra como cash flow "
-        "no retorno econômico."
+        "AMORTIZATION usa agora o valor "
+        "econômico total no retorno."
+    )
+
+    print(
+        "Cash e in-kind permanecem "
+        "componentes separados."
+    )
+
+    print(
+        "VIUR11 não é mais representado "
+        "como amortização 100% cash."
+    )
+
+    print(
+        "cash_flow_per_unit foi preservado "
+        "temporariamente como alias de "
+        "cash puro para migração downstream."
     )
 
     print(
         "Eventos não confirmados não geram "
         "ajuste automático."
+    )
+
+    print(
+        "Nenhum evento PENDING_REVIEW é "
+        "aceito nesta camada."
     )
 
 
