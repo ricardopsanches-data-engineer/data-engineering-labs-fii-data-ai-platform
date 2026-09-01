@@ -11,6 +11,10 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
+# ============================================================
+# Paths
+# ============================================================
+
 FEATURES_PATH = (
     PROJECT_ROOT
     / "data"
@@ -52,10 +56,13 @@ OUTPUT_PATH = (
 )
 
 
+# ============================================================
+# Target contract
+# ============================================================
+
 DEFAULT_TARGET_HORIZON = 5
 
-
-TRAINING_DATASET_VERSION = "v3"
+TRAINING_DATASET_VERSION = "v4"
 
 TARGET_HORIZON_SEMANTICS = (
     "GLOBAL_B3_TRADING_DAYS"
@@ -66,11 +73,21 @@ TARGET_RETURN_SEMANTICS = (
 )
 
 
-EXPECTED_FEATURE_VERSION = "v6"
+# ============================================================
+# Upstream contracts
+# ============================================================
 
-EXPECTED_ELIGIBILITY_VERSION = "v2"
+EXPECTED_FEATURE_VERSION = "v7"
 
-EXPECTED_PRICE_HISTORY_VERSION = "v2"
+EXPECTED_ELIGIBILITY_VERSION = "v3"
+
+EXPECTED_PRICE_QUALITY_VERSION = "v2"
+
+EXPECTED_PRICE_HISTORY_VERSION = "v3"
+
+EXPECTED_PRICE_HISTORY_SOURCE = (
+    "FII_CORPORATE_ACTION_ADJUSTED_PRICES_V3"
+)
 
 EXPECTED_PRICE_SEMANTICS = (
     "STRUCTURALLY_ADJUSTED_PRICE"
@@ -80,10 +97,23 @@ EXPECTED_RETURN_SEMANTICS = (
     "COMPOUNDED_DAILY_RETURN_ECONOMIC"
 )
 
+EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS = (
+    "TOTAL_ECONOMIC_VALUE_CASH_PLUS_IN_KIND"
+)
+
+EXPECTED_FEATURE_CORPORATE_ACTION_POLICY = (
+    "ECONOMIC_EFFECT_EMBEDDED_IN_RETURNS_"
+    "NO_DIRECT_CA_PAYLOAD_FEATURES"
+)
+
+
+# ============================================================
+# Features
+# ============================================================
 
 def load_features() -> pd.DataFrame:
     """
-    Carrega a Gold ML Features v6.
+    Carrega Gold ML Features v7.
     """
 
     if not FEATURES_PATH.exists():
@@ -105,11 +135,17 @@ def load_features() -> pd.DataFrame:
         "ticker",
         "cnpj",
         "codigo_cvm",
+
         "close_price",
+
         "feature_ready",
         "feature_version",
+
         "price_semantics",
         "return_semantics",
+
+        "corporate_action_value_semantics",
+        "feature_corporate_action_policy",
     ]
 
     missing_columns = [
@@ -151,7 +187,7 @@ def validate_features(
     dataframe: pd.DataFrame,
 ) -> None:
     """
-    Valida Features v6 e sua semântica.
+    Valida Features v7 e sua semântica.
     """
 
     duplicate_count = int(
@@ -193,13 +229,32 @@ def validate_features(
         .tolist()
     )
 
+    corporate_action_value_semantics = sorted(
+        dataframe[
+            "corporate_action_value_semantics"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    corporate_action_policy = sorted(
+        dataframe[
+            "feature_corporate_action_policy"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
     ready_count = int(
         dataframe[
             "feature_ready"
         ]
-        .fillna(
-            False
-        )
+        .fillna(False)
+        .astype(bool)
         .sum()
     )
 
@@ -248,6 +303,16 @@ def validate_features(
         f"{return_semantics}"
     )
 
+    print(
+        "Corporate Action value semantics: "
+        f"{corporate_action_value_semantics}"
+    )
+
+    print(
+        "Corporate Action feature policy: "
+        f"{corporate_action_policy}"
+    )
+
     if duplicate_count > 0:
         raise ValueError(
             "FII Features possui "
@@ -258,7 +323,7 @@ def validate_features(
         EXPECTED_FEATURE_VERSION
     ]:
         raise ValueError(
-            "Training Dataset v3 exige "
+            "Training Dataset v4 exige "
             f"FII Features "
             f"{EXPECTED_FEATURE_VERSION}."
         )
@@ -279,15 +344,38 @@ def validate_features(
             "return_semantics incompatível."
         )
 
+    if corporate_action_value_semantics != [
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    ]:
+        raise ValueError(
+            "Features possui "
+            "corporate_action_value_semantics "
+            "incompatível."
+        )
+
+    if corporate_action_policy != [
+        EXPECTED_FEATURE_CORPORATE_ACTION_POLICY
+    ]:
+        raise ValueError(
+            "Features possui "
+            "feature_corporate_action_policy "
+            "incompatível."
+        )
+
     print(
         "\nData Quality aprovada."
     )
 
 
+# ============================================================
+# ML Eligibility
+# ============================================================
+
 def load_ml_eligibility() -> pd.DataFrame:
     """
     Carrega universo supervisionável
-    e governança temporal da Eligibility v2.
+    e governança temporal da
+    ML Eligibility v3.
     """
 
     if not ML_ELIGIBILITY_PATH.exists():
@@ -325,10 +413,15 @@ def load_ml_eligibility() -> pd.DataFrame:
         "ml_ineligibility_reason",
 
         "ml_eligibility_version",
+
         "source_feature_version",
+        "source_price_quality_version",
 
         "price_semantics",
         "return_semantics",
+        "corporate_action_value_semantics",
+
+        "eligibility_policy",
     ]
 
     missing_columns = [
@@ -379,10 +472,10 @@ def validate_ml_eligibility(
     target_horizon: int,
 ) -> None:
     """
-    Valida Eligibility v2.
+    Valida ML Eligibility v3.
 
     Ela é a fonte oficial do universo
-    supervisionável no Training v3.
+    supervisionável no Training v4.
     """
 
     duplicate_count = int(
@@ -407,6 +500,16 @@ def validate_ml_eligibility(
     feature_versions = sorted(
         dataframe[
             "source_feature_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    price_quality_versions = sorted(
+        dataframe[
+            "source_price_quality_version"
         ]
         .dropna()
         .astype(str)
@@ -454,10 +557,33 @@ def validate_ml_eligibility(
         .tolist()
     )
 
+    corporate_action_value_semantics = sorted(
+        dataframe[
+            "corporate_action_value_semantics"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    eligibility_policies = sorted(
+        dataframe[
+            "eligibility_policy"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
     eligible_count = int(
         dataframe[
             "ml_eligible"
-        ].sum()
+        ]
+        .fillna(False)
+        .astype(bool)
+        .sum()
     )
 
     print(
@@ -506,6 +632,11 @@ def validate_ml_eligibility(
     )
 
     print(
+        "Price Quality versions: "
+        f"{price_quality_versions}"
+    )
+
+    print(
         f"Target horizons: "
         f"{horizons}"
     )
@@ -513,6 +644,26 @@ def validate_ml_eligibility(
     print(
         "Target horizon semantics: "
         f"{horizon_semantics}"
+    )
+
+    print(
+        f"Price semantics: "
+        f"{price_semantics}"
+    )
+
+    print(
+        f"Return semantics: "
+        f"{return_semantics}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{corporate_action_value_semantics}"
+    )
+
+    print(
+        "Eligibility policies: "
+        f"{eligibility_policies}"
     )
 
     if duplicate_count > 0:
@@ -525,7 +676,7 @@ def validate_ml_eligibility(
         EXPECTED_ELIGIBILITY_VERSION
     ]:
         raise ValueError(
-            "Training Dataset v3 exige "
+            "Training Dataset v4 exige "
             f"ML Eligibility "
             f"{EXPECTED_ELIGIBILITY_VERSION}."
         )
@@ -535,7 +686,16 @@ def validate_ml_eligibility(
     ]:
         raise ValueError(
             "Eligibility não referencia "
-            "Features v6."
+            f"Features {EXPECTED_FEATURE_VERSION}."
+        )
+
+    if price_quality_versions != [
+        EXPECTED_PRICE_QUALITY_VERSION
+    ]:
+        raise ValueError(
+            "Eligibility não referencia "
+            "Price Quality "
+            f"{EXPECTED_PRICE_QUALITY_VERSION}."
         )
 
     if horizons != [
@@ -571,21 +731,35 @@ def validate_ml_eligibility(
             "return_semantics incompatível."
         )
 
+    if corporate_action_value_semantics != [
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    ]:
+        raise ValueError(
+            "Eligibility possui "
+            "corporate_action_value_semantics "
+            "incompatível."
+        )
+
     print(
         "\nData Quality aprovada."
     )
 
 
+# ============================================================
+# Price History
+# ============================================================
+
 def load_price_history() -> pd.DataFrame:
     """
-    Carrega Price History v2.
+    Carrega Price History v3.
 
     O histórico fornece:
 
-    - calendário global B3
+    - calendário global observado
     - preço ajustado no target
     - daily_return_economic
     - curva acumulada de retorno econômico
+    - contrato econômico de Corporate Actions
     """
 
     if not PRICE_HISTORY_PATH.exists():
@@ -612,12 +786,16 @@ def load_price_history() -> pd.DataFrame:
             "daily_return_adjusted_price",
             "daily_return_economic",
 
-            "cash_flow_per_unit_adjusted",
+            "cash_amount_per_unit_adjusted",
+            "in_kind_amount_per_unit_adjusted",
+            "corporate_action_value_per_unit_adjusted",
 
             "price_history_version",
             "price_history_source",
+
             "price_semantics",
             "return_semantics",
+            "corporate_action_value_semantics",
         ],
     )
 
@@ -647,7 +825,8 @@ def validate_price_history(
     dataframe: pd.DataFrame,
 ) -> None:
     """
-    Valida Price History v2.
+    Valida Price History v3 e
+    sua semântica econômica.
     """
 
     duplicate_count = int(
@@ -669,6 +848,16 @@ def validate_price_history(
         .tolist()
     )
 
+    sources = sorted(
+        dataframe[
+            "price_history_source"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
     price_semantics = sorted(
         dataframe[
             "price_semantics"
@@ -682,6 +871,16 @@ def validate_price_history(
     return_semantics = sorted(
         dataframe[
             "return_semantics"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    corporate_action_value_semantics = sorted(
+        dataframe[
+            "corporate_action_value_semantics"
         ]
         .dropna()
         .astype(str)
@@ -742,6 +941,54 @@ def validate_price_history(
         ).sum()
     )
 
+    negative_cash = int(
+        (
+            dataframe[
+                "cash_amount_per_unit_adjusted"
+            ]
+            < 0
+        ).sum()
+    )
+
+    negative_in_kind = int(
+        (
+            dataframe[
+                "in_kind_amount_per_unit_adjusted"
+            ]
+            < 0
+        ).sum()
+    )
+
+    negative_total_value = int(
+        (
+            dataframe[
+                "corporate_action_value_per_unit_adjusted"
+            ]
+            < 0
+        ).sum()
+    )
+
+    economic_component_mismatch = int(
+        (
+            ~np.isclose(
+                (
+                    dataframe[
+                        "cash_amount_per_unit_adjusted"
+                    ]
+                    +
+                    dataframe[
+                        "in_kind_amount_per_unit_adjusted"
+                    ]
+                ),
+                dataframe[
+                    "corporate_action_value_per_unit_adjusted"
+                ],
+                rtol=1e-8,
+                atol=1e-8,
+            )
+        ).sum()
+    )
+
     print(
         "\n======================================"
     )
@@ -778,6 +1025,11 @@ def validate_price_history(
     )
 
     print(
+        f"Histórico sources: "
+        f"{sources}"
+    )
+
+    print(
         f"Price semantics: "
         f"{price_semantics}"
     )
@@ -785,6 +1037,11 @@ def validate_price_history(
     print(
         f"Return semantics: "
         f"{return_semantics}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{corporate_action_value_semantics}"
     )
 
     print(
@@ -809,6 +1066,26 @@ def validate_price_history(
         f"{close_alias_mismatch:,}"
     )
 
+    print(
+        f"Cash ajustado negativo: "
+        f"{negative_cash:,}"
+    )
+
+    print(
+        f"In-kind ajustado negativo: "
+        f"{negative_in_kind:,}"
+    )
+
+    print(
+        "Valor econômico ajustado negativo: "
+        f"{negative_total_value:,}"
+    )
+
+    print(
+        "Mismatch cash + in-kind != total: "
+        f"{economic_component_mismatch:,}"
+    )
+
     if duplicate_count > 0:
         raise ValueError(
             "Price History possui "
@@ -819,8 +1096,17 @@ def validate_price_history(
         EXPECTED_PRICE_HISTORY_VERSION
     ]:
         raise ValueError(
-            "Training Dataset v3 exige "
-            "Price History v2."
+            "Training Dataset v4 exige "
+            "Price History v3."
+        )
+
+    if sources != [
+        EXPECTED_PRICE_HISTORY_SOURCE
+    ]:
+        raise ValueError(
+            "Price History possui "
+            "source incompatível: "
+            f"{sources}"
         )
 
     if price_semantics != [
@@ -837,6 +1123,15 @@ def validate_price_history(
         raise ValueError(
             "Price History possui "
             "return_semantics incompatível."
+        )
+
+    if corporate_action_value_semantics != [
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    ]:
+        raise ValueError(
+            "Price History possui "
+            "corporate_action_value_semantics "
+            "incompatível."
         )
 
     if invalid_close_prices > 0:
@@ -865,10 +1160,39 @@ def validate_price_history(
             "close_price_adjusted."
         )
 
+    if negative_cash > 0:
+        raise ValueError(
+            "Price History possui "
+            "cash ajustado negativo."
+        )
+
+    if negative_in_kind > 0:
+        raise ValueError(
+            "Price History possui "
+            "in-kind ajustado negativo."
+        )
+
+    if negative_total_value > 0:
+        raise ValueError(
+            "Price History possui "
+            "valor econômico ajustado negativo."
+        )
+
+    if economic_component_mismatch > 0:
+        raise ValueError(
+            "Price History possui "
+            "cash + in-kind diferente "
+            "do valor econômico total."
+        )
+
     print(
         "\nData Quality aprovada."
     )
 
+
+# ============================================================
+# Global calendar
+# ============================================================
 
 def build_global_calendar(
     price_history: pd.DataFrame,
@@ -914,11 +1238,17 @@ def validate_eligibility_calendar(
     target_horizon: int,
 ) -> None:
     """
-    Revalida independentemente a regra
-    T -> T+5 global B3.
+    Revalida independentemente:
 
-    Assim o Training v3 não aceita
-    silenciosamente um target_date incorreto.
+        feature_date
+        ->
+        target_date
+
+    como exatamente T+N no calendário
+    global B3 observado.
+
+    O Training Dataset não aceita
+    silenciosamente target_date incorreto.
     """
 
     feature_calendar = calendar.rename(
@@ -1072,6 +1402,10 @@ def validate_eligibility_calendar(
     )
 
 
+# ============================================================
+# Economic return curve
+# ============================================================
+
 def build_economic_return_curve(
     price_history: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -1081,16 +1415,22 @@ def build_economic_return_curve(
 
     Para cada observação:
 
-        growth_factor_t =
-            1 + daily_return_economic_t
+        growth_factor_t
+            =
+        1 + daily_return_economic_t
 
     e:
 
-        cumulative_log_growth_t =
-            Σ log(growth_factor)
+        cumulative_log_growth_t
+            =
+        soma log(growth_factor)
 
-    Então o retorno econômico entre
-    feature_date T e target_date U é:
+    Portanto o retorno entre:
+
+        feature_date = T
+        target_date  = U
+
+    é:
 
         exp(
             cumulative_log_growth_U
@@ -1098,7 +1438,7 @@ def build_economic_return_curve(
             cumulative_log_growth_T
         ) - 1
 
-    Portanto:
+    Semântica temporal:
 
         (T, U]
 
@@ -1106,8 +1446,13 @@ def build_economic_return_curve(
     Os retornos posteriores até U são
     incluídos.
 
-    Isso incorpora corretamente cash flows
-    econômicos como AMORTIZATION.
+    daily_return_economic já incorpora
+    corretamente:
+
+        - ajuste estrutural
+        - cash
+        - in-kind
+        - valor econômico total
     """
 
     history = price_history.sort_values(
@@ -1118,15 +1463,19 @@ def build_economic_return_curve(
     ).copy()
 
     #
-    # Primeira observação de cada ticker
-    # possui NULL estrutural.
+    # Primeira observação possui
+    # NULL estrutural esperado.
     #
+
     history[
         "economic_return_component"
-    ] = history[
-        "daily_return_economic"
-    ].fillna(
-        0.0
+    ] = (
+        history[
+            "daily_return_economic"
+        ]
+        .fillna(
+            0.0
+        )
     )
 
     history[
@@ -1193,29 +1542,41 @@ def build_economic_return_curve(
     return history
 
 
+# ============================================================
+# Training universe
+# ============================================================
+
 def build_training_base(
     features: pd.DataFrame,
     eligibility: pd.DataFrame,
 ) -> pd.DataFrame:
     """
     Constrói base supervisionável usando
-    exatamente o universo da Eligibility v2.
+    exatamente o universo da
+    ML Eligibility v3.
 
-    Nenhuma sample é removida por
-    ml_eligible neste estágio.
+    IMPORTANTE:
 
-    O campo ml_eligible permanece no
-    training dataset para filtragem
-    governada downstream.
+    ml_eligible NÃO remove fisicamente
+    samples nesta camada.
+
+    Training Dataset preserva:
+
+        eligible
+        +
+        ineligible
+
+    para permitir auditoria e aplicação
+    governada posterior pelo Split /
+    treinamento.
     """
 
     ready_features = features[
         features[
             "feature_ready"
         ]
-        .fillna(
-            False
-        )
+        .fillna(False)
+        .astype(bool)
     ].copy()
 
     eligibility_columns = [
@@ -1242,6 +1603,13 @@ def build_training_base(
         "ml_ineligibility_reason",
 
         "ml_eligibility_version",
+
+        "source_feature_version",
+        "source_price_quality_version",
+
+        "eligibility_policy",
+
+        "corporate_action_value_semantics",
     ]
 
     eligibility_base = eligibility[
@@ -1256,6 +1624,10 @@ def build_training_base(
             "feature_date",
         ],
         validate="one_to_one",
+        suffixes=(
+            "_eligibility",
+            "",
+        ),
     )
 
     missing_feature_rows = int(
@@ -1269,7 +1641,7 @@ def build_training_base(
     if missing_feature_rows > 0:
         raise ValueError(
             "Existem samples da Eligibility "
-            "sem Features v6 correspondentes."
+            "sem Features v7 correspondentes."
         )
 
     invalid_ready = int(
@@ -1277,6 +1649,8 @@ def build_training_base(
             ~dataframe[
                 "feature_ready"
             ]
+            .fillna(False)
+            .astype(bool)
         ).sum()
     )
 
@@ -1288,6 +1662,10 @@ def build_training_base(
 
     return dataframe
 
+
+# ============================================================
+# Feature economic curve
+# ============================================================
 
 def attach_feature_economic_curve(
     dataframe: pd.DataFrame,
@@ -1342,6 +1720,10 @@ def attach_feature_economic_curve(
     return result
 
 
+# ============================================================
+# Target economic curve
+# ============================================================
+
 def attach_target_economic_curve(
     dataframe: pd.DataFrame,
     economic_history: pd.DataFrame,
@@ -1349,7 +1731,7 @@ def attach_target_economic_curve(
 ) -> pd.DataFrame:
     """
     Anexa preço e curva econômica
-    exatamente em target_date.
+    exatamente na target_date.
     """
 
     target_price_column = (
@@ -1361,8 +1743,10 @@ def attach_target_economic_curve(
         [
             "ticker",
             "trade_date",
+
             "close_price",
             "close_price_raw",
+
             "cumulative_economic_log_growth",
         ]
     ].rename(
@@ -1416,6 +1800,10 @@ def attach_target_economic_curve(
     return result
 
 
+# ============================================================
+# Target calculation
+# ============================================================
+
 def calculate_targets(
     dataframe: pd.DataFrame,
     target_horizon: int,
@@ -1423,14 +1811,20 @@ def calculate_targets(
     """
     Calcula target oficial econômico.
 
-    target_return_next_5d:
+    target_return_next_Nd:
 
-        Π(1 + daily_return_economic)
-        para observações em:
+        produto(
+            1 + daily_return_economic
+        )
+
+    para observações em:
 
         (feature_date, target_date]
 
-    A razão simples de preços é mantida
+    O target é portanto temporalmente
+    posterior às features.
+
+    A razão simples de preços permanece
     apenas como diagnóstico.
     """
 
@@ -1460,9 +1854,11 @@ def calculate_targets(
     )
 
     #
-    # Diagnóstico:
-    # retorno exclusivamente de preço.
+    # --------------------------------------------------------
+    # Price-only diagnostic
+    # --------------------------------------------------------
     #
+
     result[
         target_price_return_column
     ] = (
@@ -1485,9 +1881,11 @@ def calculate_targets(
     )
 
     #
-    # Target oficial:
-    # retorno econômico composto.
+    # --------------------------------------------------------
+    # Official economic target
+    # --------------------------------------------------------
     #
+
     economic_log_return = (
         result[
             "economic_curve_at_target"
@@ -1516,9 +1914,11 @@ def calculate_targets(
     )
 
     #
-    # Quanto a semântica econômica difere
-    # da simples razão de preços.
+    # --------------------------------------------------------
+    # Economic vs price-only audit
+    # --------------------------------------------------------
     #
+
     result[
         "target_economic_vs_price_difference"
     ] = (
@@ -1541,9 +1941,7 @@ def calculate_targets(
 
     result[
         "target_name"
-    ] = (
-        target_return_column
-    )
+    ] = target_return_column
 
     result[
         "target_return_semantics"
@@ -1554,10 +1952,19 @@ def calculate_targets(
     return result
 
 
+# ============================================================
+# Metadata
+# ============================================================
+
 def add_metadata(
     dataframe: pd.DataFrame,
     target_horizon: int,
 ) -> pd.DataFrame:
+    """
+    Persiste linhagem técnica e
+    semântica do Training Dataset v4.
+    """
+
     result = dataframe.copy()
 
     result[
@@ -1589,9 +1996,21 @@ def add_metadata(
     )
 
     result[
+        "source_price_quality_version"
+    ] = (
+        EXPECTED_PRICE_QUALITY_VERSION
+    )
+
+    result[
         "source_price_history_version"
     ] = (
         EXPECTED_PRICE_HISTORY_VERSION
+    )
+
+    result[
+        "source_price_history_source"
+    ] = (
+        EXPECTED_PRICE_HISTORY_SOURCE
     )
 
     result[
@@ -1607,6 +2026,19 @@ def add_metadata(
     )
 
     result[
+        "corporate_action_value_semantics"
+    ] = (
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    )
+
+    result[
+        "training_sample_policy"
+    ] = (
+        "PRESERVE_ALL_SUPERVISABLE_SAMPLES_"
+        "ML_ELIGIBLE_FILTER_DOWNSTREAM"
+    )
+
+    result[
         "training_dataset_created_at"
     ] = datetime.now(
         timezone.utc
@@ -1615,6 +2047,10 @@ def add_metadata(
     return result
 
 
+# ============================================================
+# Training Dataset validation
+# ============================================================
+
 def validate_training_dataset(
     dataframe: pd.DataFrame,
     calendar: pd.DataFrame,
@@ -1622,7 +2058,7 @@ def validate_training_dataset(
 ) -> None:
     """
     Valida contrato e semântica do
-    Training Dataset v3.
+    Training Dataset v4.
     """
 
     target_price_column = (
@@ -1653,8 +2089,8 @@ def validate_training_dataset(
         "close_price",
 
         "target_date",
-        target_price_column,
 
+        target_price_column,
         target_price_return_column,
 
         target_return_column,
@@ -1667,13 +2103,23 @@ def validate_training_dataset(
         "target_name",
 
         "feature_ready",
+
         "ml_eligible",
         "ml_ineligibility_reason",
 
         "training_dataset_version",
+
         "source_feature_version",
         "source_ml_eligibility_version",
+        "source_price_quality_version",
         "source_price_history_version",
+        "source_price_history_source",
+
+        "price_semantics",
+        "return_semantics",
+        "corporate_action_value_semantics",
+
+        "training_sample_policy",
     ]
 
     missing_columns = [
@@ -1747,10 +2193,22 @@ def validate_training_dataset(
         ).sum()
     )
 
+    target_below_floor = int(
+        (
+            dataframe[
+                target_return_column
+            ]
+            <= -1.0
+        ).sum()
+    )
+
     eligible_count = int(
         dataframe[
             "ml_eligible"
-        ].sum()
+        ]
+        .fillna(False)
+        .astype(bool)
+        .sum()
     )
 
     ineligible_count = (
@@ -1759,8 +2217,11 @@ def validate_training_dataset(
     )
 
     #
-    # Validação independente T+5.
+    # --------------------------------------------------------
+    # Independent global B3 horizon validation
+    # --------------------------------------------------------
     #
+
     feature_calendar = calendar.rename(
         columns={
             "trade_date": (
@@ -1803,6 +2264,18 @@ def validate_training_dataset(
         validate="many_to_one",
     )
 
+    missing_calendar_dates = int(
+        calendar_check[
+            [
+                "expected_feature_index",
+                "expected_target_index",
+            ]
+        ]
+        .isna()
+        .sum()
+        .sum()
+    )
+
     exact_horizon = (
         calendar_check[
             "expected_target_index"
@@ -1819,9 +2292,55 @@ def validate_training_dataset(
         ).sum()
     )
 
+    #
+    # --------------------------------------------------------
+    # Semantic metadata
+    # --------------------------------------------------------
+    #
+
     versions = sorted(
         dataframe[
             "training_dataset_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    feature_versions = sorted(
+        dataframe[
+            "source_feature_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    eligibility_versions = sorted(
+        dataframe[
+            "source_ml_eligibility_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    price_quality_versions = sorted(
+        dataframe[
+            "source_price_quality_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    price_history_versions = sorted(
+        dataframe[
+            "source_price_history_version"
         ]
         .dropna()
         .astype(str)
@@ -1839,11 +2358,21 @@ def validate_training_dataset(
         .tolist()
     )
 
+    corporate_action_value_semantics = sorted(
+        dataframe[
+            "corporate_action_value_semantics"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
     print(
         "\n======================================"
     )
     print(
-        "Data Quality - Training Dataset"
+        "Data Quality - Training Dataset v4"
     )
     print(
         "======================================"
@@ -1894,6 +2423,11 @@ def validate_training_dataset(
     )
 
     print(
+        f"Datas fora do calendário: "
+        f"{missing_calendar_dates:,}"
+    )
+
+    print(
         f"Target prices inválidos: "
         f"{invalid_target_prices:,}"
     )
@@ -1914,19 +2448,49 @@ def validate_training_dataset(
     )
 
     print(
+        "Targets econômicos <= -100%: "
+        f"{target_below_floor:,}"
+    )
+
+    print(
         "Horizontes diferentes de "
         f"T+{target_horizon}: "
         f"{invalid_global_horizon:,}"
     )
 
     print(
-        "Dataset versions: "
+        f"Dataset versions: "
         f"{versions}"
+    )
+
+    print(
+        f"Feature versions: "
+        f"{feature_versions}"
+    )
+
+    print(
+        "Eligibility versions: "
+        f"{eligibility_versions}"
+    )
+
+    print(
+        "Price Quality versions: "
+        f"{price_quality_versions}"
+    )
+
+    print(
+        "Price History versions: "
+        f"{price_history_versions}"
     )
 
     print(
         "Target return semantics: "
         f"{target_semantics}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{corporate_action_value_semantics}"
     )
 
     if duplicate_count > 0:
@@ -1939,6 +2503,12 @@ def validate_training_dataset(
         raise ValueError(
             "Training Dataset possui "
             "campos obrigatórios nulos."
+        )
+
+    if missing_calendar_dates > 0:
+        raise ValueError(
+            "Training Dataset possui "
+            "datas fora do calendário global."
         )
 
     if invalid_target_prices > 0:
@@ -1965,6 +2535,12 @@ def validate_training_dataset(
             "target price-only não finito."
         )
 
+    if target_below_floor > 0:
+        raise ValueError(
+            "Training Dataset possui "
+            "target econômico <= -100%."
+        )
+
     if invalid_global_horizon > 0:
         raise ValueError(
             "Training Dataset não respeita "
@@ -1979,6 +2555,38 @@ def validate_training_dataset(
             "inconsistente."
         )
 
+    if feature_versions != [
+        EXPECTED_FEATURE_VERSION
+    ]:
+        raise ValueError(
+            "source_feature_version "
+            "inconsistente."
+        )
+
+    if eligibility_versions != [
+        EXPECTED_ELIGIBILITY_VERSION
+    ]:
+        raise ValueError(
+            "source_ml_eligibility_version "
+            "inconsistente."
+        )
+
+    if price_quality_versions != [
+        EXPECTED_PRICE_QUALITY_VERSION
+    ]:
+        raise ValueError(
+            "source_price_quality_version "
+            "inconsistente."
+        )
+
+    if price_history_versions != [
+        EXPECTED_PRICE_HISTORY_VERSION
+    ]:
+        raise ValueError(
+            "source_price_history_version "
+            "inconsistente."
+        )
+
     if target_semantics != [
         TARGET_RETURN_SEMANTICS
     ]:
@@ -1987,10 +2595,22 @@ def validate_training_dataset(
             "inconsistente."
         )
 
+    if corporate_action_value_semantics != [
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    ]:
+        raise ValueError(
+            "corporate_action_value_semantics "
+            "inconsistente."
+        )
+
     print(
         "\nData Quality aprovada."
     )
 
+
+# ============================================================
+# Economic target diagnostics
+# ============================================================
 
 def print_economic_target_diagnostics(
     dataframe: pd.DataFrame,
@@ -2000,8 +2620,9 @@ def print_economic_target_diagnostics(
     Mostra quando target econômico e
     simples razão de preços diferem.
 
-    Casos com diferença relevante tendem
-    a envolver cash flows como amortização.
+    Diferenças podem ocorrer quando
+    Corporate Actions econômicos entram
+    em (feature_date, target_date].
     """
 
     target_return_column = (
@@ -2038,6 +2659,21 @@ def print_economic_target_diagnostics(
         ).sum()
     )
 
+    eligible_difference_count = int(
+        (
+            dataframe[
+                "ml_eligible"
+            ]
+            .fillna(False)
+            .astype(bool)
+            &
+            (
+                absolute_difference
+                > 1e-10
+            )
+        ).sum()
+    )
+
     print(
         "\n======================================"
     )
@@ -2058,6 +2694,11 @@ def print_economic_target_diagnostics(
         f"{materially_different_count:,}"
     )
 
+    print(
+        "Samples ML eligible com diferença: "
+        f"{eligible_difference_count:,}"
+    )
+
     if different_count == 0:
         print(
             "\nNenhuma diferença encontrada."
@@ -2073,11 +2714,17 @@ def print_economic_target_diagnostics(
             "ticker",
             "feature_date",
             "target_date",
+
             "close_price",
-            f"target_price_next_{target_horizon}d",
+
+            f"target_price_next_"
+            f"{target_horizon}d",
+
             target_price_return_column,
             target_return_column,
+
             difference_column,
+
             "ml_eligible",
         ]
     ].copy()
@@ -2103,6 +2750,10 @@ def print_economic_target_diagnostics(
     )
 
 
+# ============================================================
+# Summary
+# ============================================================
+
 def print_summary(
     dataframe: pd.DataFrame,
     target_horizon: int,
@@ -2120,6 +2771,8 @@ def print_summary(
         dataframe[
             "ml_eligible"
         ]
+        .fillna(False)
+        .astype(bool)
     ].copy()
 
     positive_count = int(
@@ -2176,13 +2829,19 @@ def print_summary(
     )
 
     print(
+        "Source Price Quality: "
+        f"{EXPECTED_PRICE_QUALITY_VERSION}"
+    )
+
+    print(
         "Source Price History: "
         f"{EXPECTED_PRICE_HISTORY_VERSION}"
     )
 
     print(
         "Target horizon: "
-        f"{target_horizon} pregões B3 globais"
+        f"{target_horizon} "
+        "pregões B3 globais"
     )
 
     print(
@@ -2193,6 +2852,11 @@ def print_summary(
     print(
         "Target return semantics: "
         f"{TARGET_RETURN_SEMANTICS}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS}"
     )
 
     print(
@@ -2286,10 +2950,15 @@ def print_summary(
     )
 
 
+# ============================================================
+# Main
+# ============================================================
+
 def main() -> None:
+
     parser = argparse.ArgumentParser(
         description=(
-            "Constrói FII Training Dataset v3 "
+            "Constrói FII Training Dataset v4 "
             "com target econômico e horizonte "
             "global B3."
         )
@@ -2302,7 +2971,7 @@ def main() -> None:
         help=(
             "Horizonte futuro em pregões "
             "globais B3. "
-            "A Eligibility v2 atual foi "
+            "A ML Eligibility v3 atual foi "
             "construída para 5."
         ),
     )
@@ -2326,6 +2995,21 @@ def main() -> None:
     print(
         f"Version: "
         f"{TRAINING_DATASET_VERSION}"
+    )
+
+    print(
+        "Source Features: "
+        f"{EXPECTED_FEATURE_VERSION}"
+    )
+
+    print(
+        "Source Eligibility: "
+        f"{EXPECTED_ELIGIBILITY_VERSION}"
+    )
+
+    print(
+        "Source Price History: "
+        f"{EXPECTED_PRICE_HISTORY_VERSION}"
     )
 
     print(
@@ -2451,7 +3135,7 @@ def main() -> None:
 
     print(
         "O universo supervisionável vem "
-        "da ML Eligibility v2."
+        "da ML Eligibility v3."
     )
 
     print(
@@ -2466,14 +3150,30 @@ def main() -> None:
     )
 
     print(
-        "target_price_return é mantido "
+        "O target permanece exatamente "
+        "T+5 sessões globais B3."
+    )
+
+    print(
+        "target_price_return permanece "
         "somente para auditoria."
     )
 
     print(
-        "Corporate Actions confirmados e "
-        "cash flows econômicos podem entrar "
-        "corretamente no target."
+        "Corporate Actions confirmados "
+        "já estão incorporados "
+        "economicamente nos retornos."
+    )
+
+    print(
+        "Cash e in-kind permanecem "
+        "semanticamente separados upstream."
+    )
+
+    print(
+        "O Training Dataset não utiliza "
+        "payload futuro de Corporate Action "
+        "como feature."
     )
 
 
