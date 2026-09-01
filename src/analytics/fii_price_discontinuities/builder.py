@@ -80,25 +80,8 @@ COMMON_FACTORS = [
 FACTOR_TOLERANCE = 0.10
 
 
-# v4:
-#     50%
-#
-# v5:
-#     30%
-#
-# O threshold agora significa:
-#
-#     "merece revisão"
-#
-# e NÃO:
-#
-#     "é corporate action"
-#
 MIN_CANDIDATE_ABSOLUTE_DAILY_RETURN = 0.30
 
-
-# Mantido apenas para diagnóstico
-# comparativo com a política anterior.
 LEGACY_V4_THRESHOLD = 0.50
 
 
@@ -138,12 +121,48 @@ REVIEW_COLUMNS = [
     "event_date",
     "review_status",
     "event_type",
+
+    "quantity_multiplier",
+    "price_adjustment_factor",
+
+    "cash_amount_per_unit",
+    "in_kind_amount_per_unit",
+    "total_economic_value_per_unit",
+    "in_kind_asset_ticker",
+    "in_kind_quantity_per_unit",
+
+    "corporate_action_record_date",
+    "corporate_action_effective_date",
+    "cash_payment_date",
+    "in_kind_delivery_date",
+    "first_post_event_trade_date",
+
+    "confirmation_source",
+    "confirmation_date",
+    "governance_review_date",
+    "review_notes",
+]
+
+
+DATE_REVIEW_COLUMNS = [
+    "event_date",
+    "corporate_action_record_date",
+    "corporate_action_effective_date",
+    "cash_payment_date",
+    "in_kind_delivery_date",
+    "first_post_event_trade_date",
+    "confirmation_date",
+    "governance_review_date",
+]
+
+
+NUMERIC_REVIEW_COLUMNS = [
     "quantity_multiplier",
     "price_adjustment_factor",
     "cash_amount_per_unit",
-    "confirmation_source",
-    "confirmation_date",
-    "review_notes",
+    "in_kind_amount_per_unit",
+    "total_economic_value_per_unit",
+    "in_kind_quantity_per_unit",
 ]
 
 
@@ -484,12 +503,16 @@ def validate_source(
 
 
 # ============================================================
-# Review registry
+# Review registry v2
 # ============================================================
 
 def load_reviews() -> pd.DataFrame:
     """
     Carrega decisões humanas/governadas.
+
+    Registry v2 contém também o payload
+    econômico e temporal das Corporate
+    Actions confirmadas.
 
     O detector nunca transforma candidato
     automaticamente em corporate action.
@@ -511,6 +534,7 @@ def load_reviews() -> pd.DataFrame:
             "ticker": "string",
             "review_status": "string",
             "event_type": "string",
+            "in_kind_asset_ticker": "string",
             "confirmation_source": "string",
             "review_notes": "string",
         },
@@ -525,7 +549,8 @@ def load_reviews() -> pd.DataFrame:
     if missing_columns:
         raise ValueError(
             "Arquivo de reviews possui "
-            "schema incompatível."
+            "schema incompatível com "
+            "Registry v2."
             "\nColunas ausentes: "
             f"{missing_columns}"
         )
@@ -557,40 +582,6 @@ def load_reviews() -> pd.DataFrame:
     )
 
     reviews[
-        "event_date"
-    ] = pd.to_datetime(
-        reviews[
-            "event_date"
-        ],
-        errors="coerce",
-    )
-
-    reviews[
-        "confirmation_date"
-    ] = pd.to_datetime(
-        reviews[
-            "confirmation_date"
-        ],
-        errors="coerce",
-    )
-
-    numeric_columns = [
-        "quantity_multiplier",
-        "price_adjustment_factor",
-        "cash_amount_per_unit",
-    ]
-
-    for column in numeric_columns:
-        reviews[
-            column
-        ] = pd.to_numeric(
-            reviews[
-                column
-            ],
-            errors="coerce",
-        )
-
-    reviews[
         "review_status"
     ] = (
         reviews[
@@ -619,6 +610,37 @@ def load_reviews() -> pd.DataFrame:
         )
     )
 
+    reviews[
+        "in_kind_asset_ticker"
+    ] = (
+        reviews[
+            "in_kind_asset_ticker"
+        ]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+    )
+
+    for column in DATE_REVIEW_COLUMNS:
+        reviews[
+            column
+        ] = pd.to_datetime(
+            reviews[
+                column
+            ],
+            errors="coerce",
+        )
+
+    for column in NUMERIC_REVIEW_COLUMNS:
+        reviews[
+            column
+        ] = pd.to_numeric(
+            reviews[
+                column
+            ],
+            errors="coerce",
+        )
+
     validate_reviews(
         reviews
     )
@@ -632,6 +654,21 @@ def load_reviews() -> pd.DataFrame:
         f"{len(reviews):,}"
     )
 
+    confirmed_count = int(
+        reviews[
+            "review_status"
+        ]
+        .eq(
+            "CONFIRMED"
+        )
+        .sum()
+    )
+
+    print(
+        "Corporate Actions CONFIRMED: "
+        f"{confirmed_count:,}"
+    )
+
     return reviews
 
 
@@ -639,11 +676,28 @@ def validate_reviews(
     reviews: pd.DataFrame,
 ) -> None:
     """
-    Valida o registro governado.
+    Valida Registry v2.
+
+    Regras financeiras mais fortes são
+    aplicadas apenas às Corporate Actions
+    CONFIRMED.
     """
 
     if reviews.empty:
         return
+
+    missing_columns = [
+        column
+        for column in REVIEW_COLUMNS
+        if column not in reviews.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "Registry v2 possui colunas "
+            "ausentes: "
+            f"{missing_columns}"
+        )
 
     duplicate_count = int(
         reviews.duplicated(
@@ -723,7 +777,9 @@ def validate_reviews(
         reviews[
             "review_status"
         ]
-        == "CONFIRMED"
+        .eq(
+            "CONFIRMED"
+        )
     ].copy()
 
     if confirmed.empty:
@@ -760,12 +816,94 @@ def validate_reviews(
             "confirmation_source."
         )
 
+    #
+    # confirmation_date é campo legado.
+    #
+    # Não é mais usado como fonte de
+    # semântica financeira, mas permanece
+    # obrigatório para compatibilidade com
+    # o histórico já governado.
+    #
     if confirmed[
         "confirmation_date"
     ].isna().any():
         raise ValueError(
             "Reviews CONFIRMED exigem "
-            "confirmation_date."
+            "confirmation_date legacy."
+        )
+
+    missing_first_post_trade = (
+        confirmed[
+            "first_post_event_trade_date"
+        ]
+        .isna()
+    )
+
+    if missing_first_post_trade.any():
+        raise ValueError(
+            "Corporate Action CONFIRMED exige "
+            "first_post_event_trade_date."
+        )
+
+    event_date_mismatch = (
+        confirmed[
+            "event_date"
+        ]
+        != confirmed[
+            "first_post_event_trade_date"
+        ]
+    )
+
+    if event_date_mismatch.any():
+        invalid_rows = confirmed.loc[
+            event_date_mismatch,
+            [
+                "ticker",
+                "event_date",
+                "first_post_event_trade_date",
+            ],
+        ]
+
+        raise ValueError(
+            "Contrato atual exige "
+            "event_date == "
+            "first_post_event_trade_date:\n"
+            f"{invalid_rows.to_string(index=False)}"
+        )
+
+    record_date_after_trade = (
+        confirmed[
+            "corporate_action_record_date"
+        ]
+        .notna()
+        &
+        (
+            confirmed[
+                "corporate_action_record_date"
+            ]
+            >
+            confirmed[
+                "first_post_event_trade_date"
+            ]
+        )
+    )
+
+    if record_date_after_trade.any():
+        invalid_rows = confirmed.loc[
+            record_date_after_trade,
+            [
+                "ticker",
+                "event_date",
+                "corporate_action_record_date",
+                "first_post_event_trade_date",
+            ],
+        ]
+
+        raise ValueError(
+            "corporate_action_record_date "
+            "posterior ao primeiro trade "
+            "pós-evento:\n"
+            f"{invalid_rows.to_string(index=False)}"
         )
 
     split_events = confirmed[
@@ -849,28 +987,160 @@ def validate_reviews(
         confirmed[
             "event_type"
         ]
-        == "AMORTIZATION"
-    ]
+        .eq(
+            "AMORTIZATION"
+        )
+    ].copy()
 
     if not amortizations.empty:
-        invalid_cash = (
+        invalid_total_value = (
             amortizations[
-                "cash_amount_per_unit"
+                "total_economic_value_per_unit"
             ].isna()
             |
             (
                 amortizations[
-                    "cash_amount_per_unit"
+                    "total_economic_value_per_unit"
                 ]
                 <= 0
             )
         )
 
-        if invalid_cash.any():
+        if invalid_total_value.any():
             raise ValueError(
                 "AMORTIZATION CONFIRMED exige "
-                "cash_amount_per_unit > 0."
+                "total_economic_value_per_unit > 0."
             )
+
+        negative_cash = (
+            amortizations[
+                "cash_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            < 0
+        )
+
+        if negative_cash.any():
+            raise ValueError(
+                "AMORTIZATION possui "
+                "cash_amount_per_unit negativo."
+            )
+
+        negative_in_kind = (
+            amortizations[
+                "in_kind_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            < 0
+        )
+
+        if negative_in_kind.any():
+            raise ValueError(
+                "AMORTIZATION possui "
+                "in_kind_amount_per_unit negativo."
+            )
+
+        component_sum = (
+            amortizations[
+                "cash_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            .astype(float)
+            +
+            amortizations[
+                "in_kind_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            .astype(float)
+        )
+
+        total_value = (
+            amortizations[
+                "total_economic_value_per_unit"
+            ]
+            .astype(float)
+        )
+
+        component_mismatch = (
+            ~np.isclose(
+                component_sum,
+                total_value,
+                rtol=1e-8,
+                atol=1e-8,
+            )
+        )
+
+        if component_mismatch.any():
+            invalid_rows = amortizations.loc[
+                component_mismatch,
+                [
+                    "ticker",
+                    "event_date",
+                    "cash_amount_per_unit",
+                    "in_kind_amount_per_unit",
+                    "total_economic_value_per_unit",
+                ],
+            ]
+
+            raise ValueError(
+                "Componentes econômicos da "
+                "AMORTIZATION não fecham:\n"
+                f"{invalid_rows.to_string(index=False)}"
+            )
+
+        in_kind_events = amortizations[
+            amortizations[
+                "in_kind_amount_per_unit"
+            ]
+            .fillna(
+                0.0
+            )
+            .gt(
+                0.0
+            )
+        ]
+
+        if not in_kind_events.empty:
+            missing_asset = (
+                in_kind_events[
+                    "in_kind_asset_ticker"
+                ]
+                .isna()
+            )
+
+            if missing_asset.any():
+                raise ValueError(
+                    "AMORTIZATION in-kind exige "
+                    "in_kind_asset_ticker."
+                )
+
+            invalid_quantity = (
+                in_kind_events[
+                    "in_kind_quantity_per_unit"
+                ]
+                .isna()
+                |
+                (
+                    in_kind_events[
+                        "in_kind_quantity_per_unit"
+                    ]
+                    <= 0
+                )
+            )
+
+            if invalid_quantity.any():
+                raise ValueError(
+                    "AMORTIZATION in-kind exige "
+                    "in_kind_quantity_per_unit > 0."
+                )
 
 
 # ============================================================
@@ -1076,9 +1346,6 @@ def classify_candidate(
             "EXTREME_RETURN_WITHOUT_COMMON_FACTOR_MATCH"
         )
 
-    # CRÍTICO:
-    # nenhum candidato detectado é descartado
-    # automaticamente na v5.
     review_status = (
         "PENDING_REVIEW"
     )
@@ -1279,11 +1546,51 @@ def build_discontinuities(
                     np.nan
                 ),
 
+                "in_kind_amount_per_unit": (
+                    np.nan
+                ),
+
+                "total_economic_value_per_unit": (
+                    np.nan
+                ),
+
+                "in_kind_asset_ticker": (
+                    None
+                ),
+
+                "in_kind_quantity_per_unit": (
+                    np.nan
+                ),
+
+                "corporate_action_record_date": (
+                    pd.NaT
+                ),
+
+                "corporate_action_effective_date": (
+                    pd.NaT
+                ),
+
+                "cash_payment_date": (
+                    pd.NaT
+                ),
+
+                "in_kind_delivery_date": (
+                    pd.NaT
+                ),
+
+                "first_post_event_trade_date": (
+                    pd.NaT
+                ),
+
                 "confirmation_source": (
                     None
                 ),
 
                 "confirmation_date": (
+                    pd.NaT
+                ),
+
+                "governance_review_date": (
                     pd.NaT
                 ),
 
@@ -1346,10 +1653,6 @@ def validate_review_coverage(
     Garante que toda decisão governada
     previamente continua correspondendo
     a um candidato detectado.
-
-    Como a v5 reduz o threshold,
-    decisões antigas da v4 devem continuar
-    cobertas.
     """
 
     if reviews.empty:
@@ -1454,25 +1757,18 @@ def apply_reviews(
     reviews: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Sobrepõe decisões do registry manual
+    Sobrepõe decisões do Registry v2
     aos defaults PENDING_REVIEW do detector.
+
+    Todos os atributos econômicos e
+    temporais continuam sendo governados,
+    nunca inferidos pelo detector.
     """
 
     if reviews.empty:
         return discontinuities
 
-    merge_columns = [
-        "ticker",
-        "event_date",
-        "review_status",
-        "event_type",
-        "quantity_multiplier",
-        "price_adjustment_factor",
-        "cash_amount_per_unit",
-        "confirmation_source",
-        "confirmation_date",
-        "review_notes",
-    ]
+    merge_columns = REVIEW_COLUMNS.copy()
 
     manual = reviews[
         merge_columns
@@ -1506,14 +1802,12 @@ def apply_reviews(
     ].notna()
 
     columns_to_apply = [
-        "review_status",
-        "event_type",
-        "quantity_multiplier",
-        "price_adjustment_factor",
-        "cash_amount_per_unit",
-        "confirmation_source",
-        "confirmation_date",
-        "review_notes",
+        column
+        for column in REVIEW_COLUMNS
+        if column not in {
+            "ticker",
+            "event_date",
+        }
     ]
 
     for column in columns_to_apply:
@@ -1535,7 +1829,9 @@ def apply_reviews(
         result[
             "review_status"
         ]
-        == "CONFIRMED"
+        .eq(
+            "CONFIRMED"
+        )
     )
 
     manual_columns = [
@@ -1561,7 +1857,9 @@ def validate_output(
     dataframe: pd.DataFrame,
 ) -> None:
     """
-    Valida o contrato da camada v5.
+    Valida o contrato da camada v5,
+    incluindo o payload governado do
+    Registry v2.
     """
 
     required_columns = [
@@ -1580,6 +1878,9 @@ def validate_output(
         "absolute_daily_return",
 
         "observed_factor",
+        "nearest_common_factor",
+        "factor_relative_error",
+        "factor_match",
 
         "classification",
         "confidence",
@@ -1587,6 +1888,26 @@ def validate_output(
 
         "review_status",
         "event_type",
+
+        "quantity_multiplier",
+        "price_adjustment_factor",
+
+        "cash_amount_per_unit",
+        "in_kind_amount_per_unit",
+        "total_economic_value_per_unit",
+        "in_kind_asset_ticker",
+        "in_kind_quantity_per_unit",
+
+        "corporate_action_record_date",
+        "corporate_action_effective_date",
+        "cash_payment_date",
+        "in_kind_delivery_date",
+        "first_post_event_trade_date",
+
+        "confirmation_source",
+        "confirmation_date",
+        "governance_review_date",
+        "review_notes",
 
         "is_confirmed_corporate_action",
 
@@ -1629,9 +1950,39 @@ def validate_output(
         ).sum()
     )
 
+    base_required_non_null = [
+        "ticker",
+        "cnpj",
+        "codigo_cvm",
+        "previous_trade_date",
+        "event_date",
+        "price_before",
+        "price_after",
+        "daily_return",
+        "daily_return_pct",
+        "absolute_daily_return",
+        "observed_factor",
+        "nearest_common_factor",
+        "factor_relative_error",
+        "factor_match",
+        "classification",
+        "confidence",
+        "candidate_reason",
+        "review_status",
+        "event_type",
+        "is_confirmed_corporate_action",
+        "detected_by_v4_threshold",
+        "newly_visible_in_v5_band",
+        "candidate_threshold",
+        "detection_policy",
+        "review_policy",
+        "discontinuity_version",
+        "discontinuity_source",
+    ]
+
     null_count = int(
         dataframe[
-            required_columns
+            base_required_non_null
         ]
         .isna()
         .sum()
@@ -1771,7 +2122,7 @@ def validate_output(
     )
 
     print(
-        f"Nulos obrigatórios: "
+        f"Nulos obrigatórios base: "
         f"{null_count:,}"
     )
 
@@ -1817,7 +2168,7 @@ def validate_output(
 
     if null_count > 0:
         raise ValueError(
-            "Campos obrigatórios nulos."
+            "Campos obrigatórios base nulos."
         )
 
     if invalid_statuses:
@@ -1879,7 +2230,9 @@ def validate_output(
         dataframe[
             "review_status"
         ]
-        == "CONFIRMED"
+        .eq(
+            "CONFIRMED"
+        )
     ].copy()
 
     if not confirmed.empty:
@@ -1904,10 +2257,6 @@ def print_v5_regression_checks(
     """
     Verifica explicitamente os episódios
     que motivaram a evolução da v4 -> v5.
-
-    Não exige que os tickers existam;
-    apenas mostra o resultado caso estejam
-    presentes.
     """
 
     focus_tickers = [
@@ -2147,9 +2496,26 @@ def print_summary(
         ]
     ]
 
+    in_kind_confirmed = confirmed[
+        confirmed[
+            "in_kind_amount_per_unit"
+        ]
+        .fillna(
+            0.0
+        )
+        .gt(
+            0.0
+        )
+    ]
+
     print(
         "\nCorporate Actions confirmados: "
         f"{len(confirmed):,}"
+    )
+
+    print(
+        "Corporate Actions com componente "
+        f"in-kind: {len(in_kind_confirmed):,}"
     )
 
     pending = dataframe[
@@ -2336,6 +2702,11 @@ def main() -> None:
     print(
         "Decisões governadas existentes "
         "foram reaplicadas e validadas."
+    )
+
+    print(
+        "Registry v2 foi propagado para "
+        "o payload das Corporate Actions."
     )
 
     print(
