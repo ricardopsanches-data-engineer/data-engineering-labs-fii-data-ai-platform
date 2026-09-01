@@ -10,6 +10,11 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
+
+# ============================================================
+# Paths
+# ============================================================
+
 PRICE_HISTORY_PATH = (
     PROJECT_ROOT
     / "data"
@@ -33,12 +38,16 @@ ML_FEATURES_PATH = (
 )
 
 
-FEATURE_VERSION = "v6"
+# ============================================================
+# Version / upstream semantic contract
+# ============================================================
 
-EXPECTED_PRICE_HISTORY_VERSION = "v2"
+FEATURE_VERSION = "v7"
+
+EXPECTED_PRICE_HISTORY_VERSION = "v3"
 
 EXPECTED_PRICE_HISTORY_SOURCE = (
-    "FII_CORPORATE_ACTION_ADJUSTED_PRICES"
+    "FII_CORPORATE_ACTION_ADJUSTED_PRICES_V3"
 )
 
 EXPECTED_PRICE_SEMANTICS = (
@@ -49,6 +58,14 @@ EXPECTED_RETURN_SEMANTICS = (
     "COMPOUNDED_DAILY_RETURN_ECONOMIC"
 )
 
+EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS = (
+    "TOTAL_ECONOMIC_VALUE_CASH_PLUS_IN_KIND"
+)
+
+
+# ============================================================
+# Windows
+# ============================================================
 
 def normalize_windows(
     windows: list[int],
@@ -169,6 +186,71 @@ def discover_windows_from_history(
     )
 
 
+def resolve_windows(
+    dataframe: pd.DataFrame,
+    override_windows: list[int] | None,
+) -> list[int]:
+    """
+    Resolve as janelas utilizadas pelo ML.
+
+    Prioridade:
+
+    1. --windows explícito
+    2. feature_windows da Gold Analytics
+    """
+
+    discovered_windows = (
+        discover_windows_from_history(
+            dataframe
+        )
+    )
+
+    if override_windows is None:
+        print(
+            "Janelas herdadas da "
+            "Gold Analytics: "
+            f"{discovered_windows}"
+        )
+
+        return discovered_windows
+
+    override_windows = normalize_windows(
+        override_windows
+    )
+
+    print(
+        "Janelas da Gold Analytics: "
+        f"{discovered_windows}"
+    )
+
+    print(
+        f"Override solicitado: "
+        f"{override_windows}"
+    )
+
+    unavailable_windows = [
+        window
+        for window in override_windows
+        if window not in discovered_windows
+    ]
+
+    if unavailable_windows:
+        raise ValueError(
+            "Override solicita janelas "
+            "não disponíveis na "
+            "Gold Analytics: "
+            f"{unavailable_windows}. "
+            "Disponíveis: "
+            f"{discovered_windows}"
+        )
+
+    return override_windows
+
+
+# ============================================================
+# Feature column contracts
+# ============================================================
+
 def build_window_feature_columns(
     window: int,
 ) -> list[str]:
@@ -256,11 +338,16 @@ def build_cross_window_feature_columns(
     return columns
 
 
+# ============================================================
+# Source loading
+# ============================================================
+
 def load_price_history(
     path: Path,
 ) -> pd.DataFrame:
     """
-    Carrega a Gold Analytics.
+    Carrega Gold Analytics
+    FII Price History.
     """
 
     if not path.exists():
@@ -277,10 +364,22 @@ def load_price_history(
         path
     )
 
-    if "trade_date" not in dataframe.columns:
+    required_identity_columns = [
+        "trade_date",
+        "ticker",
+    ]
+
+    missing_identity = [
+        column
+        for column in required_identity_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_identity:
         raise ValueError(
-            "A Gold Analytics não possui "
-            "a coluna trade_date."
+            "Gold Analytics não possui "
+            "colunas mínimas de identidade: "
+            f"{missing_identity}"
         )
 
     dataframe[
@@ -305,76 +404,23 @@ def load_price_history(
     return dataframe
 
 
-def resolve_windows(
-    dataframe: pd.DataFrame,
-    override_windows: list[int] | None,
-) -> list[int]:
-    """
-    Resolve as janelas utilizadas pelo ML.
-
-    Prioridade:
-
-    1. --windows explícito
-    2. feature_windows da Gold Analytics
-    """
-
-    discovered_windows = (
-        discover_windows_from_history(
-            dataframe
-        )
-    )
-
-    if override_windows is None:
-        print(
-            "Janelas herdadas da "
-            "Gold Analytics: "
-            f"{discovered_windows}"
-        )
-
-        return discovered_windows
-
-    override_windows = normalize_windows(
-        override_windows
-    )
-
-    print(
-        "Janelas da Gold Analytics: "
-        f"{discovered_windows}"
-    )
-
-    print(
-        f"Override solicitado: "
-        f"{override_windows}"
-    )
-
-    unavailable_windows = [
-        window
-        for window in override_windows
-        if window not in discovered_windows
-    ]
-
-    if unavailable_windows:
-        raise ValueError(
-            "Override solicita janelas "
-            "não disponíveis na "
-            "Gold Analytics: "
-            f"{unavailable_windows}. "
-            "Disponíveis: "
-            f"{discovered_windows}"
-        )
-
-    return override_windows
-
+# ============================================================
+# Upstream semantic validation
+# ============================================================
 
 def validate_history_semantics(
     dataframe: pd.DataFrame,
 ) -> None:
     """
-    Valida explicitamente a versão e
-    semântica econômica do Price History.
+    Valida explicitamente o contrato
+    semântico do Price History v3.
 
-    O ML Features v6 não aceita o histórico
-    RAW antigo.
+    ML Features v7 somente aceita:
+
+        preço estruturalmente ajustado
+        retorno econômico
+        valor econômico de Corporate Action
+        = cash + in-kind
     """
 
     required_metadata_columns = [
@@ -382,6 +428,7 @@ def validate_history_semantics(
         "price_history_source",
         "price_semantics",
         "return_semantics",
+        "corporate_action_value_semantics",
     ]
 
     missing_columns = [
@@ -394,7 +441,7 @@ def validate_history_semantics(
         raise ValueError(
             "Price History não possui "
             "metadados semânticos necessários "
-            "para ML Features v6: "
+            "para ML Features v7: "
             f"{missing_columns}"
         )
 
@@ -438,6 +485,18 @@ def validate_history_semantics(
         .tolist()
     )
 
+    corporate_action_value_semantics = (
+        sorted(
+            dataframe[
+                "corporate_action_value_semantics"
+            ]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+    )
+
     expected_versions = [
         EXPECTED_PRICE_HISTORY_VERSION,
     ]
@@ -454,6 +513,10 @@ def validate_history_semantics(
         EXPECTED_RETURN_SEMANTICS,
     ]
 
+    expected_corporate_action_value_semantics = [
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS,
+    ]
+
     print(
         "\n======================================"
     )
@@ -465,11 +528,13 @@ def validate_history_semantics(
     )
 
     print(
-        f"Version: {versions}"
+        f"Version: "
+        f"{versions}"
     )
 
     print(
-        f"Source: {sources}"
+        f"Source: "
+        f"{sources}"
     )
 
     print(
@@ -482,9 +547,14 @@ def validate_history_semantics(
         f"{return_semantics}"
     )
 
+    print(
+        "Corporate Action value semantics: "
+        f"{corporate_action_value_semantics}"
+    )
+
     if versions != expected_versions:
         raise ValueError(
-            "ML Features v6 exige "
+            "ML Features v7 exige "
             f"Price History "
             f"{EXPECTED_PRICE_HISTORY_VERSION}. "
             f"Encontrado: {versions}"
@@ -517,10 +587,25 @@ def validate_history_semantics(
             f"{return_semantics}"
         )
 
+    if (
+        corporate_action_value_semantics
+        != expected_corporate_action_value_semantics
+    ):
+        raise ValueError(
+            "Price History possui "
+            "corporate_action_value_semantics "
+            "incompatível: "
+            f"{corporate_action_value_semantics}"
+        )
+
     print(
         "\nContrato semântico aprovado."
     )
 
+
+# ============================================================
+# History contract validation
+# ============================================================
 
 def validate_history_contract(
     dataframe: pd.DataFrame,
@@ -529,6 +614,11 @@ def validate_history_contract(
     """
     Valida o contrato da Gold Analytics
     necessário para produzir a Gold ML.
+
+    Importante:
+    cash/in-kind permanecem auditáveis
+    no Price History, mas NÃO são usados
+    diretamente como features preditivas.
     """
 
     base_required_columns = [
@@ -556,6 +646,7 @@ def validate_history_contract(
         "price_history_source",
         "price_semantics",
         "return_semantics",
+        "corporate_action_value_semantics",
     ]
 
     dynamic_required_columns = (
@@ -651,6 +742,38 @@ def validate_history_contract(
         ).sum()
     )
 
+    invalid_close = int(
+        (
+            dataframe[
+                "close_price"
+            ]
+            <= 0
+        ).sum()
+    )
+
+    invalid_trades = int(
+        (
+            dataframe[
+                "trades_quantity"
+            ]
+            < 0
+        ).sum()
+    )
+
+    non_finite_daily_return = int(
+        (
+            dataframe[
+                "daily_return"
+            ].notna()
+            &
+            ~np.isfinite(
+                dataframe[
+                    "daily_return"
+                ]
+            )
+        ).sum()
+    )
+
     print(
         "\n======================================"
     )
@@ -693,6 +816,21 @@ def validate_history_contract(
         f"{return_alias_mismatch:,}"
     )
 
+    print(
+        f"close_price inválidos: "
+        f"{invalid_close:,}"
+    )
+
+    print(
+        f"trades_quantity inválidos: "
+        f"{invalid_trades:,}"
+    )
+
+    print(
+        "daily_return não finitos: "
+        f"{non_finite_daily_return:,}"
+    )
+
     if duplicate_count > 0:
         raise ValueError(
             "Price History possui duplicidades."
@@ -718,10 +856,32 @@ def validate_history_contract(
             "semântica econômica."
         )
 
+    if invalid_close > 0:
+        raise ValueError(
+            "Price History possui "
+            "close_price inválido."
+        )
+
+    if invalid_trades > 0:
+        raise ValueError(
+            "Price History possui "
+            "trades_quantity inválido."
+        )
+
+    if non_finite_daily_return > 0:
+        raise ValueError(
+            "Price History possui "
+            "daily_return não finito."
+        )
+
     print(
         "\nData Quality do input aprovada."
     )
 
+
+# ============================================================
+# Cross-window features
+# ============================================================
 
 def calculate_cross_window_features(
     dataframe: pd.DataFrame,
@@ -837,20 +997,28 @@ def calculate_cross_window_features(
     return result
 
 
+# ============================================================
+# Build ML features
+# ============================================================
+
 def build_ml_features(
     history: pd.DataFrame,
     windows: list[int],
 ) -> pd.DataFrame:
     """
-    Constrói o dataset ML.
+    Constrói dataset Gold ML.
 
-    As colunas usadas como features
-    continuam compatíveis com o contrato
-    anterior, porém agora derivam do
-    Price History econômico v2.
+    As features derivam da série econômica
+    do Price History v3.
 
-    Colunas RAW adicionais permanecem
-    apenas para auditoria.
+    Colunas RAW permanecem apenas como
+    auditoria e NÃO fazem parte do contrato
+    preditivo utilizado posteriormente
+    pelo Feature Contract.
+
+    Corporate Action cash / in-kind também
+    não são transformados diretamente em
+    features nesta camada.
     """
 
     base_columns = [
@@ -860,14 +1028,23 @@ def build_ml_features(
         "codigo_cvm",
 
         "close_price",
+
+        #
+        # Audit trail
+        #
         "close_price_raw",
         "close_price_adjusted",
 
         "trades_quantity",
 
         "daily_return",
+
+        #
+        # Audit trail
+        #
         "daily_return_raw",
         "daily_return_economic",
+
         "daily_return_pct",
 
         "observations_count",
@@ -950,6 +1127,10 @@ def build_ml_features(
     return features
 
 
+# ============================================================
+# ML feature validation
+# ============================================================
+
 def validate_ml_features(
     dataframe: pd.DataFrame,
     windows: list[int],
@@ -969,7 +1150,8 @@ def validate_ml_features(
     )
 
     print(
-        f"Janelas: {windows}"
+        f"Janelas: "
+        f"{windows}"
     )
 
     print(
@@ -1119,6 +1301,7 @@ def validate_ml_features(
         )
 
     for window in windows:
+
         minimum_observations = (
             window + 1
         )
@@ -1284,17 +1467,21 @@ def validate_ml_features(
     )
 
 
+# ============================================================
+# Metadata
+# ============================================================
+
 def add_metadata(
     dataframe: pd.DataFrame,
-    history: pd.DataFrame,
     windows: list[int],
 ) -> pd.DataFrame:
     """
     Adiciona metadados técnicos e
-    semânticos.
+    semânticos da Gold ML.
 
-    A semântica é herdada do Price History
-    e persistida explicitamente na Gold ML.
+    A semântica é herdada do
+    Price History v3 e persistida
+    explicitamente.
     """
 
     result = dataframe.copy()
@@ -1318,11 +1505,15 @@ def add_metadata(
 
     result[
         "source_price_history_version"
-    ] = EXPECTED_PRICE_HISTORY_VERSION
+    ] = (
+        EXPECTED_PRICE_HISTORY_VERSION
+    )
 
     result[
         "source_price_history_source"
-    ] = EXPECTED_PRICE_HISTORY_SOURCE
+    ] = (
+        EXPECTED_PRICE_HISTORY_SOURCE
+    )
 
     result[
         "price_semantics"
@@ -1331,6 +1522,12 @@ def add_metadata(
     result[
         "return_semantics"
     ] = EXPECTED_RETURN_SEMANTICS
+
+    result[
+        "corporate_action_value_semantics"
+    ] = (
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    )
 
     result[
         "feature_price_semantics"
@@ -1344,8 +1541,19 @@ def add_metadata(
         "ECONOMIC_RETURN"
     )
 
+    result[
+        "feature_corporate_action_policy"
+    ] = (
+        "ECONOMIC_EFFECT_EMBEDDED_IN_RETURNS_"
+        "NO_DIRECT_CA_PAYLOAD_FEATURES"
+    )
+
     return result
 
+
+# ============================================================
+# Metadata validation
+# ============================================================
 
 def validate_feature_metadata(
     dataframe: pd.DataFrame,
@@ -1356,7 +1564,9 @@ def validate_feature_metadata(
     """
 
     expected_values = {
-        "feature_version": FEATURE_VERSION,
+        "feature_version": (
+            FEATURE_VERSION
+        ),
         "source_price_history_version": (
             EXPECTED_PRICE_HISTORY_VERSION
         ),
@@ -1369,11 +1579,18 @@ def validate_feature_metadata(
         "return_semantics": (
             EXPECTED_RETURN_SEMANTICS
         ),
+        "corporate_action_value_semantics": (
+            EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+        ),
         "feature_price_semantics": (
             "STRUCTURALLY_ADJUSTED_PRICE"
         ),
         "feature_return_semantics": (
             "ECONOMIC_RETURN"
+        ),
+        "feature_corporate_action_policy": (
+            "ECONOMIC_EFFECT_EMBEDDED_IN_RETURNS_"
+            "NO_DIRECT_CA_PAYLOAD_FEATURES"
         ),
     }
 
@@ -1396,7 +1613,7 @@ def validate_feature_metadata(
                 f"{column}"
             )
 
-        values = (
+        values = sorted(
             dataframe[
                 column
             ]
@@ -1426,6 +1643,10 @@ def validate_feature_metadata(
     )
 
 
+# ============================================================
+# Save
+# ============================================================
+
 def save_features(
     dataframe: pd.DataFrame,
     destination: Path,
@@ -1444,6 +1665,10 @@ def save_features(
         index=False,
     )
 
+
+# ============================================================
+# Summary
+# ============================================================
 
 def print_summary(
     dataframe: pd.DataFrame,
@@ -1480,6 +1705,11 @@ def print_summary(
     )
 
     print(
+        "Source contract: "
+        f"{EXPECTED_PRICE_HISTORY_SOURCE}"
+    )
+
+    print(
         "Price semantics: "
         f"{EXPECTED_PRICE_SEMANTICS}"
     )
@@ -1487,6 +1717,11 @@ def print_summary(
     print(
         "Return semantics: "
         f"{EXPECTED_RETURN_SEMANTICS}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS}"
     )
 
     print(
@@ -1523,6 +1758,7 @@ def print_summary(
     )
 
     for window in windows:
+
         return_column = (
             f"return_{window}d"
         )
@@ -1563,11 +1799,15 @@ def print_summary(
             )
 
 
+# ============================================================
+# Main
+# ============================================================
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Constrói Gold ML "
-            "FII Features v6."
+            "FII Features v7."
         )
     )
 
@@ -1631,7 +1871,6 @@ def main() -> None:
 
     features = add_metadata(
         dataframe=features,
-        history=history,
         windows=windows,
     )
 
@@ -1664,9 +1903,9 @@ def main() -> None:
     )
 
     print(
-        "As features agora herdam "
-        "explicitamente a semântica econômica "
-        "do Price History v2."
+        "As features herdam explicitamente "
+        "o contrato econômico do "
+        "Price History v3."
     )
 
     print(
@@ -1680,8 +1919,20 @@ def main() -> None:
     )
 
     print(
-        "Colunas RAW foram preservadas "
-        "somente para auditoria."
+        "O efeito econômico de Corporate "
+        "Actions já está incorporado "
+        "nos retornos."
+    )
+
+    print(
+        "Cash e in-kind NÃO são utilizados "
+        "diretamente como features "
+        "preditivas."
+    )
+
+    print(
+        "Colunas RAW permanecem somente "
+        "para auditoria."
     )
 
 
