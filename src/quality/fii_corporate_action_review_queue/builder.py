@@ -53,6 +53,49 @@ VALID_PRIORITIES = {
 }
 
 
+OUTPUT_COLUMNS = [
+    "ticker",
+    "cnpj",
+    "codigo_cvm",
+
+    "previous_trade_date",
+    "event_date",
+
+    "price_before",
+    "price_after",
+
+    "daily_return",
+    "daily_return_pct",
+    "absolute_daily_return",
+
+    "observed_factor",
+    "nearest_common_factor",
+    "factor_relative_error",
+    "factor_match",
+
+    "classification",
+    "confidence",
+    "candidate_reason",
+
+    "detected_by_v4_threshold",
+    "newly_visible_in_v5_band",
+
+    "review_priority",
+    "priority_score",
+
+    "review_status",
+    "event_type",
+
+    "requires_manual_review",
+
+    "discontinuity_version",
+    "discontinuity_source",
+
+    "review_queue_version",
+    "review_queue_source",
+]
+
+
 def load_discontinuities() -> pd.DataFrame:
     """
     Carrega a camada Price Discontinuities v5.
@@ -393,6 +436,59 @@ def calculate_priority_score(
     )
 
 
+def build_empty_review_queue(
+    source_dataframe: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Constrói uma Review Queue vazia,
+    preservando o schema esperado.
+
+    Uma fila vazia é um estado válido
+    quando não existem candidatos
+    PENDING_REVIEW.
+    """
+
+    empty = (
+        source_dataframe
+        .head(0)
+        .copy()
+    )
+
+    empty[
+        "review_priority"
+    ] = pd.Series(
+        dtype="string"
+    )
+
+    empty[
+        "priority_score"
+    ] = pd.Series(
+        dtype="float64"
+    )
+
+    empty[
+        "requires_manual_review"
+    ] = pd.Series(
+        dtype="bool"
+    )
+
+    empty[
+        "review_queue_version"
+    ] = pd.Series(
+        dtype="string"
+    )
+
+    empty[
+        "review_queue_source"
+    ] = pd.Series(
+        dtype="string"
+    )
+
+    return empty[
+        OUTPUT_COLUMNS
+    ].copy()
+
+
 def build_review_queue(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -400,6 +496,9 @@ def build_review_queue(
     Constrói somente a fila pendente.
 
     Nenhuma decisão governada é alterada.
+
+    A ausência de candidatos pendentes
+    produz uma Review Queue vazia válida.
     """
 
     pending = dataframe[
@@ -425,7 +524,9 @@ def build_review_queue(
     )
 
     if pending.empty:
-        return pd.DataFrame()
+        return build_empty_review_queue(
+            dataframe
+        )
 
     pending[
         "review_priority"
@@ -453,50 +554,8 @@ def build_review_queue(
         "review_queue_source"
     ] = EXPECTED_DISCONTINUITY_VERSION
 
-    output_columns = [
-        "ticker",
-        "cnpj",
-        "codigo_cvm",
-
-        "previous_trade_date",
-        "event_date",
-
-        "price_before",
-        "price_after",
-
-        "daily_return",
-        "daily_return_pct",
-        "absolute_daily_return",
-
-        "observed_factor",
-        "nearest_common_factor",
-        "factor_relative_error",
-        "factor_match",
-
-        "classification",
-        "confidence",
-        "candidate_reason",
-
-        "detected_by_v4_threshold",
-        "newly_visible_in_v5_band",
-
-        "review_priority",
-        "priority_score",
-
-        "review_status",
-        "event_type",
-
-        "requires_manual_review",
-
-        "discontinuity_version",
-        "discontinuity_source",
-
-        "review_queue_version",
-        "review_queue_source",
-    ]
-
     pending = pending[
-        output_columns
+        OUTPUT_COLUMNS
     ].copy()
 
     priority_order = pd.CategoricalDtype(
@@ -554,12 +613,11 @@ def validate_output(
 ) -> None:
     """
     Valida a Review Queue.
-    """
 
-    if dataframe.empty:
-        raise ValueError(
-            "Review Queue ficou vazia."
-        )
+    Uma Review Queue vazia é válida
+    quando todos os candidatos já foram
+    governados.
+    """
 
     required_columns = [
         "ticker",
@@ -832,17 +890,22 @@ def print_summary(
         "\nClassificações:"
     )
 
-    for value, count in (
-        dataframe[
-            "classification"
-        ]
-        .value_counts()
-        .items()
-    ):
+    if dataframe.empty:
         print(
-            f"  {value}: "
-            f"{count:,}"
+            "  Nenhuma classificação pendente."
         )
+    else:
+        for value, count in (
+            dataframe[
+                "classification"
+            ]
+            .value_counts()
+            .items()
+        ):
+            print(
+                f"  {value}: "
+                f"{count:,}"
+            )
 
     print(
         "\n======================================"
@@ -854,37 +917,42 @@ def print_summary(
         "======================================"
     )
 
-    display_columns = [
-        "review_priority",
-        "priority_score",
+    if dataframe.empty:
+        print(
+            "Nenhum evento pendente de revisão."
+        )
+    else:
+        display_columns = [
+            "review_priority",
+            "priority_score",
 
-        "ticker",
-        "event_date",
+            "ticker",
+            "event_date",
 
-        "price_before",
-        "price_after",
+            "price_before",
+            "price_after",
 
-        "daily_return_pct",
+            "daily_return_pct",
 
-        "classification",
-        "confidence",
+            "classification",
+            "confidence",
 
-        "factor_match",
+            "factor_match",
 
-        "newly_visible_in_v5_band",
-    ]
-
-    print(
-        dataframe[
-            display_columns
+            "newly_visible_in_v5_band",
         ]
-        .head(
-            20
+
+        print(
+            dataframe[
+                display_columns
+            ]
+            .head(
+                20
+            )
+            .to_string(
+                index=False
+            )
         )
-        .to_string(
-            index=False
-        )
-    )
 
     print(
         "\nArquivo de saída:"
@@ -957,10 +1025,16 @@ def main() -> None:
         "ou descartado automaticamente."
     )
 
-    print(
-        "A fila apenas prioriza "
-        "a revisão humana."
-    )
+    if review_queue.empty:
+        print(
+            "Nenhum candidato permanece "
+            "pendente de revisão."
+        )
+    else:
+        print(
+            "A fila apenas prioriza "
+            "a revisão humana."
+        )
 
 
 if __name__ == "__main__":
