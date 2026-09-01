@@ -4,12 +4,15 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
+
+# ============================================================
+# Paths
+# ============================================================
 
 TRAINING_DATASET_PATH = (
     PROJECT_ROOT
@@ -44,15 +47,23 @@ TEST_PATH = (
 )
 
 
+# ============================================================
+# Split configuration
+# ============================================================
+
 DEFAULT_VALIDATION_DAYS = 10
 
 DEFAULT_TEST_DAYS = 10
 
 
-SPLIT_VERSION = "v2"
+# ============================================================
+# Split contract
+# ============================================================
+
+SPLIT_VERSION = "v3"
 
 
-EXPECTED_TRAINING_DATASET_VERSION = "v3"
+EXPECTED_TRAINING_DATASET_VERSION = "v4"
 
 EXPECTED_TARGET_HORIZON = 5
 
@@ -64,11 +75,17 @@ EXPECTED_TARGET_RETURN_SEMANTICS = (
     "COMPOUNDED_DAILY_RETURN_ECONOMIC"
 )
 
-EXPECTED_FEATURE_VERSION = "v6"
+EXPECTED_FEATURE_VERSION = "v7"
 
-EXPECTED_ELIGIBILITY_VERSION = "v2"
+EXPECTED_ELIGIBILITY_VERSION = "v3"
 
-EXPECTED_PRICE_HISTORY_VERSION = "v2"
+EXPECTED_PRICE_QUALITY_VERSION = "v2"
+
+EXPECTED_PRICE_HISTORY_VERSION = "v3"
+
+EXPECTED_PRICE_HISTORY_SOURCE = (
+    "FII_CORPORATE_ACTION_ADJUSTED_PRICES_V3"
+)
 
 EXPECTED_PRICE_SEMANTICS = (
     "STRUCTURALLY_ADJUSTED_PRICE"
@@ -78,19 +95,34 @@ EXPECTED_RETURN_SEMANTICS = (
     "COMPOUNDED_DAILY_RETURN_ECONOMIC"
 )
 
+EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS = (
+    "TOTAL_ECONOMIC_VALUE_CASH_PLUS_IN_KIND"
+)
+
+EXPECTED_TRAINING_SAMPLE_POLICY = (
+    "PRESERVE_ALL_SUPERVISABLE_SAMPLES_"
+    "ML_ELIGIBLE_FILTER_DOWNSTREAM"
+)
+
+
+# ============================================================
+# Load Training Dataset
+# ============================================================
 
 def load_training_dataset(
     path: Path,
 ) -> pd.DataFrame:
     """
-    Carrega Training Dataset v3.
+    Carrega Training Dataset v4.
 
     O dataset contém tanto samples
     elegíveis quanto inelegíveis para
     preservar auditoria.
 
-    O split v2 filtrará explicitamente
-    somente ml_eligible=True.
+    Temporal Split v3 filtra
+    explicitamente somente:
+
+        ml_eligible=True
     """
 
     if not path.exists():
@@ -130,10 +162,15 @@ def load_training_dataset(
 
         "source_feature_version",
         "source_ml_eligibility_version",
+        "source_price_quality_version",
         "source_price_history_version",
+        "source_price_history_source",
 
         "price_semantics",
         "return_semantics",
+        "corporate_action_value_semantics",
+
+        "training_sample_policy",
     ]
 
     missing_columns = [
@@ -179,12 +216,16 @@ def load_training_dataset(
     return dataframe
 
 
+# ============================================================
+# Training Dataset contract validation
+# ============================================================
+
 def validate_training_dataset_contract(
     dataframe: pd.DataFrame,
 ) -> None:
     """
     Valida o contrato semântico completo
-    recebido pelo Temporal Split v2.
+    recebido pelo Temporal Split v3.
     """
 
     duplicate_count = int(
@@ -273,9 +314,29 @@ def validate_training_dataset_contract(
         .tolist()
     )
 
+    price_quality_versions = sorted(
+        dataframe[
+            "source_price_quality_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
     price_history_versions = sorted(
         dataframe[
             "source_price_history_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    price_history_sources = sorted(
+        dataframe[
+            "source_price_history_source"
         ]
         .dropna()
         .astype(str)
@@ -303,13 +364,32 @@ def validate_training_dataset_contract(
         .tolist()
     )
 
+    corporate_action_value_semantics = sorted(
+        dataframe[
+            "corporate_action_value_semantics"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    training_sample_policies = sorted(
+        dataframe[
+            "training_sample_policy"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
     feature_ready_count = int(
         dataframe[
             "feature_ready"
         ]
-        .fillna(
-            False
-        )
+        .fillna(False)
+        .astype(bool)
         .sum()
     )
 
@@ -317,9 +397,8 @@ def validate_training_dataset_contract(
         dataframe[
             "ml_eligible"
         ]
-        .fillna(
-            False
-        )
+        .fillna(False)
+        .astype(bool)
         .sum()
     )
 
@@ -336,6 +415,16 @@ def validate_training_dataset_contract(
             <= dataframe[
                 "feature_date"
             ]
+        ).sum()
+    )
+
+    invalid_feature_ready = int(
+        (
+            ~dataframe[
+                "feature_ready"
+            ]
+            .fillna(False)
+            .astype(bool)
         ).sum()
     )
 
@@ -362,6 +451,11 @@ def validate_training_dataset_contract(
     print(
         f"Feature ready: "
         f"{feature_ready_count:,}"
+    )
+
+    print(
+        f"Feature not ready: "
+        f"{invalid_feature_ready:,}"
     )
 
     print(
@@ -420,8 +514,18 @@ def validate_training_dataset_contract(
     )
 
     print(
+        "Source Price Quality versions: "
+        f"{price_quality_versions}"
+    )
+
+    print(
         "Source Price History versions: "
         f"{price_history_versions}"
+    )
+
+    print(
+        "Source Price History sources: "
+        f"{price_history_sources}"
     )
 
     print(
@@ -432,6 +536,16 @@ def validate_training_dataset_contract(
     print(
         "Return semantics: "
         f"{return_semantics}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{corporate_action_value_semantics}"
+    )
+
+    print(
+        "Training sample policies: "
+        f"{training_sample_policies}"
     )
 
     if duplicate_count > 0:
@@ -452,19 +566,26 @@ def validate_training_dataset_contract(
             "target_date inválida."
         )
 
+    if invalid_feature_ready > 0:
+        raise ValueError(
+            "Training Dataset possui "
+            "sample com feature_ready=False."
+        )
+
     if versions != [
         EXPECTED_TRAINING_DATASET_VERSION
     ]:
         raise ValueError(
-            "Temporal Split v2 exige "
-            "Training Dataset v3."
+            "Temporal Split v3 exige "
+            f"Training Dataset "
+            f"{EXPECTED_TRAINING_DATASET_VERSION}."
         )
 
     if horizons != [
         EXPECTED_TARGET_HORIZON
     ]:
         raise ValueError(
-            "Temporal Split v2 exige "
+            "Temporal Split v3 exige "
             f"target_horizon="
             f"{EXPECTED_TARGET_HORIZON}. "
             f"Encontrado: {horizons}"
@@ -490,24 +611,44 @@ def validate_training_dataset_contract(
         EXPECTED_FEATURE_VERSION
     ]:
         raise ValueError(
-            "Temporal Split v2 exige "
-            "Features v6."
+            "Temporal Split v3 exige "
+            f"Features "
+            f"{EXPECTED_FEATURE_VERSION}."
         )
 
     if eligibility_versions != [
         EXPECTED_ELIGIBILITY_VERSION
     ]:
         raise ValueError(
-            "Temporal Split v2 exige "
-            "ML Eligibility v2."
+            "Temporal Split v3 exige "
+            f"ML Eligibility "
+            f"{EXPECTED_ELIGIBILITY_VERSION}."
+        )
+
+    if price_quality_versions != [
+        EXPECTED_PRICE_QUALITY_VERSION
+    ]:
+        raise ValueError(
+            "Temporal Split v3 exige "
+            "Price Quality "
+            f"{EXPECTED_PRICE_QUALITY_VERSION}."
         )
 
     if price_history_versions != [
         EXPECTED_PRICE_HISTORY_VERSION
     ]:
         raise ValueError(
-            "Temporal Split v2 exige "
-            "Price History v2."
+            "Temporal Split v3 exige "
+            "Price History "
+            f"{EXPECTED_PRICE_HISTORY_VERSION}."
+        )
+
+    if price_history_sources != [
+        EXPECTED_PRICE_HISTORY_SOURCE
+    ]:
+        raise ValueError(
+            "Temporal Split v3 encontrou "
+            "Price History source incompatível."
         )
 
     if price_semantics != [
@@ -524,10 +665,30 @@ def validate_training_dataset_contract(
             "return_semantics incompatível."
         )
 
+    if corporate_action_value_semantics != [
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    ]:
+        raise ValueError(
+            "corporate_action_value_semantics "
+            "incompatível."
+        )
+
+    if training_sample_policies != [
+        EXPECTED_TRAINING_SAMPLE_POLICY
+    ]:
+        raise ValueError(
+            "training_sample_policy "
+            "incompatível."
+        )
+
     print(
         "\nData Quality aprovada."
     )
 
+
+# ============================================================
+# ML eligibility filter
+# ============================================================
 
 def filter_ml_eligible(
     dataframe: pd.DataFrame,
@@ -537,21 +698,18 @@ def filter_ml_eligible(
     ml_eligible=True podem entrar nos
     splits usados pelo modelo.
 
-    As samples inelegíveis permanecem no
-    Training Dataset v3 original e não
-    são fisicamente destruídas.
+    Samples inelegíveis permanecem no
+    Training Dataset v4 original para
+    auditoria.
     """
 
     eligible_mask = (
         dataframe[
             "ml_eligible"
         ]
-        .astype(
-            "boolean"
-        )
-        .fillna(
-            False
-        )
+        .astype("boolean")
+        .fillna(False)
+        .astype(bool)
     )
 
     eligible = dataframe[
@@ -583,8 +741,8 @@ def filter_ml_eligible(
     )
 
     print(
-        f"Samples inelegíveis excluídas "
-        f"dos splits: "
+        "Samples inelegíveis excluídas "
+        "dos splits: "
         f"{len(ineligible):,}"
     )
 
@@ -599,6 +757,7 @@ def filter_ml_eligible(
             ~eligible[
                 "ml_eligible"
             ]
+            .astype(bool)
         ).sum()
     )
 
@@ -610,11 +769,15 @@ def filter_ml_eligible(
     return eligible
 
 
+# ============================================================
+# Feature-date universe
+# ============================================================
+
 def get_sorted_feature_dates(
     dataframe: pd.DataFrame,
 ) -> list[pd.Timestamp]:
     """
-    Lista as feature_dates presentes no
+    Lista feature_dates existentes no
     universo ML elegível.
     """
 
@@ -643,6 +806,10 @@ def get_sorted_feature_dates(
     return dates
 
 
+# ============================================================
+# Resolve split boundaries
+# ============================================================
+
 def resolve_split_boundaries(
     dataframe: pd.DataFrame,
     validation_days: int,
@@ -652,13 +819,16 @@ def resolve_split_boundaries(
     pd.Timestamp,
 ]:
     """
-    Resolve as fronteiras do split sobre
-    as feature_dates disponíveis no universo
+    Resolve fronteiras sobre as
+    feature_dates disponíveis no universo
     ML elegível.
 
     validation_days e test_days representam
-    número de datas globais de feature
+    quantidades de feature_dates globais
     reservadas para cada bloco.
+
+    Esta semântica é preservada da versão
+    anterior do Temporal Split.
     """
 
     if validation_days <= 0:
@@ -685,9 +855,10 @@ def resolve_split_boundaries(
         + 1
     )
 
-    if len(
-        feature_dates
-    ) < minimum_required_dates:
+    if (
+        len(feature_dates)
+        < minimum_required_dates
+    ):
         raise ValueError(
             "Datas insuficientes para "
             "train/validation/test. "
@@ -719,11 +890,22 @@ def resolve_split_boundaries(
         ]
     )
 
+    if validation_start >= test_start:
+        raise ValueError(
+            "Fronteiras temporais inválidas: "
+            "validation_start deve ser "
+            "anterior a test_start."
+        )
+
     return (
         validation_start,
         test_start,
     )
 
+
+# ============================================================
+# Purged temporal split
+# ============================================================
 
 def build_temporal_split(
     dataframe: pd.DataFrame,
@@ -764,9 +946,12 @@ def build_temporal_split(
     feature_date >= test_start
 
 
-    Os filtros de target_date removem samples
-    que carregariam informação da janela
-    temporal seguinte.
+    O purge usa TARGET_DATE, e não uma
+    quantidade arbitrária de linhas.
+
+    Isso garante que targets do período
+    anterior não alcancem o período
+    seguinte.
     """
 
     train = dataframe[
@@ -822,6 +1007,10 @@ def build_temporal_split(
     )
 
 
+# ============================================================
+# Purge diagnostics
+# ============================================================
+
 def calculate_purge_diagnostics(
     dataframe: pd.DataFrame,
     train: pd.DataFrame,
@@ -831,9 +1020,8 @@ def calculate_purge_diagnostics(
     test_start: pd.Timestamp,
 ) -> dict[str, int]:
     """
-    Quantifica quais samples ML elegíveis
-    foram deliberadamente removidas pelo
-    purge nas fronteiras temporais.
+    Quantifica samples ML elegíveis
+    removidas pelo purge nas fronteiras.
     """
 
     train_region = dataframe[
@@ -925,6 +1113,10 @@ def calculate_purge_diagnostics(
     return diagnostics
 
 
+# ============================================================
+# Split validations
+# ============================================================
+
 def validate_split_not_empty(
     name: str,
     dataframe: pd.DataFrame,
@@ -958,6 +1150,8 @@ def validate_all_rows_eligible(
             ~dataframe[
                 "ml_eligible"
             ]
+            .fillna(False)
+            .astype(bool)
         ).sum()
     )
 
@@ -1061,8 +1255,8 @@ def validate_purged_boundaries(
     test_start: pd.Timestamp,
 ) -> None:
     """
-    Valida ausência de leakage através das
-    fronteiras temporais.
+    Valida ausência de leakage através
+    das fronteiras temporais.
     """
 
     invalid_train_feature = train[
@@ -1190,8 +1384,8 @@ def validate_chronological_order(
     test: pd.DataFrame,
 ) -> None:
     """
-    Confirma a ordem cronológica geral dos
-    três conjuntos.
+    Confirma ordem cronológica geral dos
+    três conjuntos e dos seus targets.
     """
 
     train_max_feature = (
@@ -1287,6 +1481,10 @@ def validate_chronological_order(
     )
 
 
+# ============================================================
+# Split metadata
+# ============================================================
+
 def add_split_metadata(
     dataframe: pd.DataFrame,
     split_name: str,
@@ -1296,7 +1494,8 @@ def add_split_metadata(
     test_days: int,
 ) -> pd.DataFrame:
     """
-    Adiciona metadata técnica e de linhagem.
+    Adiciona metadata técnica,
+    semântica e de linhagem.
     """
 
     result = dataframe.copy()
@@ -1332,6 +1531,30 @@ def add_split_metadata(
     )
 
     result[
+        "split_source_feature_version"
+    ] = (
+        EXPECTED_FEATURE_VERSION
+    )
+
+    result[
+        "split_source_ml_eligibility_version"
+    ] = (
+        EXPECTED_ELIGIBILITY_VERSION
+    )
+
+    result[
+        "split_source_price_quality_version"
+    ] = (
+        EXPECTED_PRICE_QUALITY_VERSION
+    )
+
+    result[
+        "split_source_price_history_version"
+    ] = (
+        EXPECTED_PRICE_HISTORY_VERSION
+    )
+
+    result[
         "split_requires_ml_eligible"
     ] = True
 
@@ -1339,6 +1562,42 @@ def add_split_metadata(
         "split_purge_semantics"
     ] = (
         "TARGET_DATE_BEFORE_NEXT_SPLIT"
+    )
+
+    result[
+        "split_target_horizon"
+    ] = (
+        EXPECTED_TARGET_HORIZON
+    )
+
+    result[
+        "split_target_horizon_semantics"
+    ] = (
+        EXPECTED_TARGET_HORIZON_SEMANTICS
+    )
+
+    result[
+        "split_target_return_semantics"
+    ] = (
+        EXPECTED_TARGET_RETURN_SEMANTICS
+    )
+
+    result[
+        "split_price_semantics"
+    ] = (
+        EXPECTED_PRICE_SEMANTICS
+    )
+
+    result[
+        "split_return_semantics"
+    ] = (
+        EXPECTED_RETURN_SEMANTICS
+    )
+
+    result[
+        "split_corporate_action_value_semantics"
+    ] = (
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
     )
 
     result[
@@ -1356,6 +1615,10 @@ def add_split_metadata(
     return result
 
 
+# ============================================================
+# Split metadata validation
+# ============================================================
+
 def validate_split_metadata(
     dataframe: pd.DataFrame,
     expected_name: str,
@@ -1364,7 +1627,7 @@ def validate_split_metadata(
     Valida metadata persistida.
     """
 
-    names = (
+    names = sorted(
         dataframe[
             "split_name"
         ]
@@ -1374,7 +1637,7 @@ def validate_split_metadata(
         .tolist()
     )
 
-    versions = (
+    versions = sorted(
         dataframe[
             "split_version"
         ]
@@ -1384,9 +1647,49 @@ def validate_split_metadata(
         .tolist()
     )
 
-    source_versions = (
+    source_training_versions = sorted(
         dataframe[
             "split_source_training_dataset_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    source_feature_versions = sorted(
+        dataframe[
+            "split_source_feature_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    source_eligibility_versions = sorted(
+        dataframe[
+            "split_source_ml_eligibility_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    source_quality_versions = sorted(
+        dataframe[
+            "split_source_price_quality_version"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    source_history_versions = sorted(
+        dataframe[
+            "split_source_price_history_version"
         ]
         .dropna()
         .astype(str)
@@ -1399,6 +1702,56 @@ def validate_split_metadata(
             "split_requires_ml_eligible"
         ]
         .dropna()
+        .unique()
+        .tolist()
+    )
+
+    purge_semantics = sorted(
+        dataframe[
+            "split_purge_semantics"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    target_horizons = sorted(
+        dataframe[
+            "split_target_horizon"
+        ]
+        .dropna()
+        .astype(int)
+        .unique()
+        .tolist()
+    )
+
+    target_horizon_semantics = sorted(
+        dataframe[
+            "split_target_horizon_semantics"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    target_return_semantics = sorted(
+        dataframe[
+            "split_target_return_semantics"
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    corporate_action_value_semantics = sorted(
+        dataframe[
+            "split_corporate_action_value_semantics"
+        ]
+        .dropna()
+        .astype(str)
         .unique()
         .tolist()
     )
@@ -1419,11 +1772,43 @@ def validate_split_metadata(
             f"{expected_name}: {versions}"
         )
 
-    if source_versions != [
+    if source_training_versions != [
         EXPECTED_TRAINING_DATASET_VERSION
     ]:
         raise ValueError(
             "Versão de Training Dataset "
+            f"incompatível em {expected_name}."
+        )
+
+    if source_feature_versions != [
+        EXPECTED_FEATURE_VERSION
+    ]:
+        raise ValueError(
+            "Versão de Features "
+            f"incompatível em {expected_name}."
+        )
+
+    if source_eligibility_versions != [
+        EXPECTED_ELIGIBILITY_VERSION
+    ]:
+        raise ValueError(
+            "Versão de ML Eligibility "
+            f"incompatível em {expected_name}."
+        )
+
+    if source_quality_versions != [
+        EXPECTED_PRICE_QUALITY_VERSION
+    ]:
+        raise ValueError(
+            "Versão de Price Quality "
+            f"incompatível em {expected_name}."
+        )
+
+    if source_history_versions != [
+        EXPECTED_PRICE_HISTORY_VERSION
+    ]:
+        raise ValueError(
+            "Versão de Price History "
             f"incompatível em {expected_name}."
         )
 
@@ -1435,6 +1820,53 @@ def validate_split_metadata(
             "política ml_eligible=True."
         )
 
+    if purge_semantics != [
+        "TARGET_DATE_BEFORE_NEXT_SPLIT"
+    ]:
+        raise ValueError(
+            f"{expected_name} possui "
+            "split_purge_semantics inválida."
+        )
+
+    if target_horizons != [
+        EXPECTED_TARGET_HORIZON
+    ]:
+        raise ValueError(
+            f"{expected_name} possui "
+            "target horizon incompatível."
+        )
+
+    if target_horizon_semantics != [
+        EXPECTED_TARGET_HORIZON_SEMANTICS
+    ]:
+        raise ValueError(
+            f"{expected_name} possui "
+            "target horizon semantics "
+            "incompatível."
+        )
+
+    if target_return_semantics != [
+        EXPECTED_TARGET_RETURN_SEMANTICS
+    ]:
+        raise ValueError(
+            f"{expected_name} possui "
+            "target return semantics "
+            "incompatível."
+        )
+
+    if corporate_action_value_semantics != [
+        EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+    ]:
+        raise ValueError(
+            f"{expected_name} possui "
+            "Corporate Action value semantics "
+            "incompatível."
+        )
+
+
+# ============================================================
+# Split summary
+# ============================================================
 
 def print_split_summary(
     name: str,
@@ -1444,12 +1876,31 @@ def print_split_summary(
     Resumo de um split.
     """
 
-    target_column = (
+    target_names = (
         dataframe[
             "target_name"
         ]
-        .iloc[0]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
     )
+
+    if len(target_names) != 1:
+        raise ValueError(
+            f"{name} possui target_name "
+            f"inconsistente: {target_names}"
+        )
+
+    target_column = (
+        target_names[0]
+    )
+
+    if target_column not in dataframe.columns:
+        raise ValueError(
+            f"{name} não possui coluna "
+            f"target física: {target_column}"
+        )
 
     target_mean = (
         dataframe[
@@ -1507,6 +1958,11 @@ def print_split_summary(
     )
 
     print(
+        f"Target: "
+        f"{target_column}"
+    )
+
+    print(
         f"Target médio: "
         f"{target_mean * 100:.4f}%"
     )
@@ -1527,6 +1983,10 @@ def print_split_summary(
     )
 
 
+# ============================================================
+# Save
+# ============================================================
+
 def save_split(
     dataframe: pd.DataFrame,
     destination: Path,
@@ -1546,10 +2006,14 @@ def save_split(
     )
 
 
+# ============================================================
+# Main
+# ============================================================
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Constrói FII Temporal Split v2 "
+            "Constrói FII Temporal Split v3 "
             "purgado usando somente "
             "samples ML eligible."
         )
@@ -1606,8 +2070,33 @@ def main() -> None:
     )
 
     print(
+        "Source Features: "
+        f"{EXPECTED_FEATURE_VERSION}"
+    )
+
+    print(
+        "Source Eligibility: "
+        f"{EXPECTED_ELIGIBILITY_VERSION}"
+    )
+
+    print(
+        "Source Price Quality: "
+        f"{EXPECTED_PRICE_QUALITY_VERSION}"
+    )
+
+    print(
+        "Source Price History: "
+        f"{EXPECTED_PRICE_HISTORY_VERSION}"
+    )
+
+    print(
         "Eligibility policy: "
         "ml_eligible=True"
+    )
+
+    print(
+        "Purge policy: "
+        "target_date before next split"
     )
 
     print(
@@ -1910,6 +2399,36 @@ def main() -> None:
     )
 
     print(
+        "Features source: "
+        f"{EXPECTED_FEATURE_VERSION}"
+    )
+
+    print(
+        "Eligibility source: "
+        f"{EXPECTED_ELIGIBILITY_VERSION}"
+    )
+
+    print(
+        "Price Quality source: "
+        f"{EXPECTED_PRICE_QUALITY_VERSION}"
+    )
+
+    print(
+        "Price History source: "
+        f"{EXPECTED_PRICE_HISTORY_VERSION}"
+    )
+
+    print(
+        "Target semantics: "
+        f"{EXPECTED_TARGET_RETURN_SEMANTICS}"
+    )
+
+    print(
+        "Corporate Action value semantics: "
+        f"{EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS}"
+    )
+
+    print(
         "Universo supervisionável original: "
         f"{len(dataframe):,}"
     )
@@ -2001,10 +2520,20 @@ def main() -> None:
     )
 
     print(
+        "A política temporal da versão "
+        "anterior foi preservada."
+    )
+
+    print(
+        "O target permanece econômico "
+        "e exatamente T+5 global B3."
+    )
+
+    print(
         "O conjunto test permanece "
         "reservado como holdout."
     )
-    
+
 
 if __name__ == "__main__":
     main()
