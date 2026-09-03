@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 # Observability contract
 # ============================================================
 
-OBSERVABILITY_VERSION = "v2"
+OBSERVABILITY_VERSION = "v3"
 
 DEFAULT_MAX_FRESHNESS_DAYS = 7
 
@@ -123,6 +123,25 @@ TEST_PATH = (
 )
 
 
+WALK_FORWARD_DIR = (
+    PROJECT_ROOT
+    / "data"
+    / "gold"
+    / "ml"
+    / "fii_walk_forward"
+)
+
+WALK_FORWARD_METRICS_PATH = (
+    WALK_FORWARD_DIR
+    / "fold_metrics.parquet"
+)
+
+WALK_FORWARD_SUMMARY_PATH = (
+    WALK_FORWARD_DIR
+    / "summary.json"
+)
+
+
 # ============================================================
 # Observability outputs
 # ============================================================
@@ -192,6 +211,52 @@ EXPECTED_TEST_HOLDOUT_POLICY = (
 )
 
 
+EXPECTED_WALK_FORWARD_VERSION = "v1"
+
+EXPECTED_WALK_FORWARD_POLICY = (
+    "EXPANDING_WINDOW_PURGED"
+)
+
+EXPECTED_WALK_FORWARD_FOLDS = 12
+
+EXPECTED_WALK_FORWARD_VALIDATION_SESSIONS = 5
+
+EXPECTED_WALK_FORWARD_FEATURE_COUNT = 18
+
+EXPECTED_WALK_FORWARD_TEST_POLICY = (
+    "RESERVED_FINAL_HOLDOUT_NO_MODEL_EVALUATION"
+)
+
+EXPECTED_WALK_FORWARD_MODELS = (
+    "dummy_mean",
+    "linear_regression",
+    "random_forest",
+)
+
+EXPECTED_WALK_FORWARD_FEATURE_COLUMNS = (
+    "daily_return",
+    "return_5d",
+    "volatility_5d",
+    "price_to_ma5",
+    "return_10d",
+    "volatility_10d",
+    "price_to_ma10",
+    "return_20d",
+    "volatility_20d",
+    "price_to_ma20",
+    "return_spread_5d_10d",
+    "ma_ratio_5_10",
+    "volatility_ratio_5d_10d",
+    "trades_ratio_5d_10d",
+    "return_spread_10d_20d",
+    "ma_ratio_10_20",
+    "volatility_ratio_10d_20d",
+    "trades_ratio_10d_20d",
+)
+
+WALK_FORWARD_FLOAT_TOLERANCE = 1e-12
+
+
 # ============================================================
 # Structures
 # ============================================================
@@ -201,6 +266,7 @@ FreshnessMode = Literal[
     "TARGET_DATE",
     "EVENT_DRIVEN",
     "HISTORICAL_SPLIT",
+    "HISTORICAL_EXPERIMENT",
 ]
 
 
@@ -224,6 +290,11 @@ class DatasetSpec:
         O artefato é deliberadamente histórico.
         Sua saúde depende das fronteiras,
         purge, eligibility e overlap.
+
+    HISTORICAL_EXPERIMENT
+        O artefato é um resultado experimental
+        histórico. Sua saúde depende de contrato,
+        integridade temporal, holdout e métricas.
     """
 
     name: str
@@ -549,6 +620,49 @@ DATASETS = (
             "HISTORICAL_SPLIT"
         ),
     ),
+
+    DatasetSpec(
+        name="walk_forward_fold_metrics",
+        path=WALK_FORWARD_METRICS_PATH,
+        date_candidates=(
+            "validation_start",
+            "validation_end",
+        ),
+        key_candidates=(
+            (
+                "fold_id",
+                "model",
+            ),
+        ),
+        required_columns=(
+            "walk_forward_version",
+            "fold_id",
+            "model",
+            "validation_feature_sessions",
+            "train_start",
+            "train_end",
+            "train_target_max",
+            "validation_start",
+            "validation_end",
+            "validation_target_min",
+            "validation_target_max",
+            "train_rows",
+            "validation_rows",
+            "train_tickers",
+            "validation_tickers",
+            "train_feature_dates",
+            "validation_feature_dates",
+            "majority_directional_accuracy",
+            "mae",
+            "rmse",
+            "r2",
+            "directional_accuracy",
+            "directional_lift",
+        ),
+        freshness_mode=(
+            "HISTORICAL_EXPERIMENT"
+        ),
+    ),
 )
 
 
@@ -789,6 +903,31 @@ def add_freshness_check(
                 policy=(
                     "HISTORICAL_SPLIT_"
                     "BOUNDARIES_GOVERN_HEALTH"
+                ),
+            )
+        )
+
+        return
+
+
+    if (
+        spec.freshness_mode
+        == "HISTORICAL_EXPERIMENT"
+    ):
+        result[
+            "checks"
+        ].append(
+            build_check(
+                name="freshness",
+                status="PASS",
+                message=(
+                    "Freshness contra a data "
+                    "atual não se aplica a "
+                    "experimento histórico."
+                ),
+                policy=(
+                    "HISTORICAL_EXPERIMENT_"
+                    "CONTRACT_GOVERNS_HEALTH"
                 ),
             )
         )
@@ -2536,6 +2675,1517 @@ def validate_temporal_splits(
 
 
 # ============================================================
+# Walk-Forward checks
+# ============================================================
+
+def load_walk_forward_summary(
+) -> tuple[
+    dict[str, Any] | None,
+    list[dict[str, Any]],
+]:
+    checks: list[
+        dict[str, Any]
+    ] = []
+
+    if not WALK_FORWARD_SUMMARY_PATH.exists():
+        checks.append(
+            build_check(
+                name=(
+                    "walk_forward.summary_exists"
+                ),
+                status="FAIL",
+                message=(
+                    "summary.json do "
+                    "Walk-Forward não encontrado."
+                ),
+                path=str(
+                    WALK_FORWARD_SUMMARY_PATH
+                ),
+            )
+        )
+
+        return (
+            None,
+            checks,
+        )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward.summary_exists"
+            ),
+            status="PASS",
+            message=(
+                "summary.json do "
+                "Walk-Forward encontrado."
+            ),
+            path=str(
+                WALK_FORWARD_SUMMARY_PATH
+            ),
+        )
+    )
+
+    try:
+        summary = json.loads(
+            WALK_FORWARD_SUMMARY_PATH
+            .read_text(
+                encoding="utf-8"
+            )
+        )
+
+    except Exception as error:
+        checks.append(
+            build_check(
+                name=(
+                    "walk_forward.summary_read"
+                ),
+                status="FAIL",
+                message=(
+                    "Falha ao ler summary.json "
+                    "do Walk-Forward."
+                ),
+                error=str(
+                    error
+                ),
+            )
+        )
+
+        return (
+            None,
+            checks,
+        )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward.summary_read"
+            ),
+            status="PASS",
+            message=(
+                "summary.json do "
+                "Walk-Forward lido com sucesso."
+            ),
+        )
+    )
+
+    return (
+        summary,
+        checks,
+    )
+
+
+def compare_summary_value(
+    checks: list[
+        dict[str, Any]
+    ],
+    name: str,
+    found: Any,
+    expected: Any,
+) -> None:
+    match = (
+        found
+        == expected
+    )
+
+    checks.append(
+        build_check(
+            name=name,
+            status=(
+                "PASS"
+                if match
+                else "FAIL"
+            ),
+            message=(
+                "Contrato correto."
+                if match
+                else (
+                    "Contrato incompatível."
+                )
+            ),
+            expected=expected,
+            found=found,
+        )
+    )
+
+
+def compare_float_value(
+    checks: list[
+        dict[str, Any]
+    ],
+    name: str,
+    found: Any,
+    expected: float,
+) -> None:
+    try:
+        found_float = float(
+            found
+        )
+
+        finite = bool(
+            np.isfinite(
+                found_float
+            )
+        )
+
+        match = (
+            finite
+            and np.isclose(
+                found_float,
+                expected,
+                rtol=0.0,
+                atol=(
+                    WALK_FORWARD_FLOAT_TOLERANCE
+                ),
+            )
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        found_float = None
+        match = False
+
+    checks.append(
+        build_check(
+            name=name,
+            status=(
+                "PASS"
+                if match
+                else "FAIL"
+            ),
+            message=(
+                "Métrica agregada reconciliada."
+                if match
+                else (
+                    "Métrica agregada divergente "
+                    "entre Parquet e summary.json."
+                )
+            ),
+            expected=expected,
+            found=found_float,
+            tolerance=(
+                WALK_FORWARD_FLOAT_TOLERANCE
+            ),
+        )
+    )
+
+
+def validate_walk_forward(
+    datasets: dict[
+        str,
+        pd.DataFrame | None,
+    ],
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, Any] | None,
+]:
+    checks: list[
+        dict[str, Any]
+    ] = []
+
+    summary, summary_checks = (
+        load_walk_forward_summary()
+    )
+
+    checks.extend(
+        summary_checks
+    )
+
+    metrics = datasets.get(
+        "walk_forward_fold_metrics"
+    )
+
+    if metrics is None:
+        checks.append(
+            build_check(
+                name=(
+                    "walk_forward.metrics_available"
+                ),
+                status="FAIL",
+                message=(
+                    "fold_metrics.parquet do "
+                    "Walk-Forward não está disponível."
+                ),
+            )
+        )
+
+        return (
+            checks,
+            summary,
+        )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward.metrics_available"
+            ),
+            status="PASS",
+            message=(
+                "fold_metrics.parquet do "
+                "Walk-Forward está disponível."
+            ),
+        )
+    )
+
+    if summary is None:
+        return (
+            checks,
+            summary,
+        )
+
+    # --------------------------------------------------------
+    # Summary contract
+    # --------------------------------------------------------
+
+    compare_summary_value(
+        checks,
+        "walk_forward.version",
+        summary.get(
+            "walk_forward_version"
+        ),
+        EXPECTED_WALK_FORWARD_VERSION,
+    )
+
+    compare_summary_value(
+        checks,
+        "walk_forward.policy",
+        summary.get(
+            "policy"
+        ),
+        EXPECTED_WALK_FORWARD_POLICY,
+    )
+
+    compare_summary_value(
+        checks,
+        "walk_forward.fold_count",
+        summary.get(
+            "fold_count"
+        ),
+        EXPECTED_WALK_FORWARD_FOLDS,
+    )
+
+    compare_summary_value(
+        checks,
+        (
+            "walk_forward."
+            "validation_feature_sessions"
+        ),
+        summary.get(
+            "validation_feature_sessions"
+        ),
+        (
+            EXPECTED_WALK_FORWARD_VALIDATION_SESSIONS
+        ),
+    )
+
+    compare_summary_value(
+        checks,
+        "walk_forward.target",
+        summary.get(
+            "target"
+        ),
+        "target_return_next_5d",
+    )
+
+    compare_summary_value(
+        checks,
+        "walk_forward.target_horizon",
+        summary.get(
+            "target_horizon"
+        ),
+        EXPECTED_TARGET_HORIZON,
+    )
+
+    compare_summary_value(
+        checks,
+        (
+            "walk_forward."
+            "target_horizon_semantics"
+        ),
+        summary.get(
+            "target_horizon_semantics"
+        ),
+        EXPECTED_TARGET_HORIZON_SEMANTICS,
+    )
+
+    compare_summary_value(
+        checks,
+        (
+            "walk_forward."
+            "target_return_semantics"
+        ),
+        summary.get(
+            "target_return_semantics"
+        ),
+        EXPECTED_TARGET_RETURN_SEMANTICS,
+    )
+
+    compare_summary_value(
+        checks,
+        "walk_forward.feature_count",
+        summary.get(
+            "feature_count"
+        ),
+        EXPECTED_WALK_FORWARD_FEATURE_COUNT,
+    )
+
+    compare_summary_value(
+        checks,
+        "walk_forward.feature_columns",
+        tuple(
+            summary.get(
+                "feature_columns",
+                [],
+            )
+        ),
+        EXPECTED_WALK_FORWARD_FEATURE_COLUMNS,
+    )
+
+    source_contract = summary.get(
+        "source_contract",
+        {},
+    )
+
+    expected_source_contract = {
+        "training_dataset_version": (
+            EXPECTED_TRAINING_DATASET_VERSION
+        ),
+        "feature_version": (
+            EXPECTED_FEATURE_VERSION
+        ),
+        "ml_eligibility_version": (
+            EXPECTED_ELIGIBILITY_VERSION
+        ),
+        "source_price_history_version": (
+            EXPECTED_PRICE_HISTORY_VERSION
+        ),
+        "source_price_quality_version": (
+            EXPECTED_PRICE_QUALITY_VERSION
+        ),
+        "price_semantics": (
+            EXPECTED_PRICE_SEMANTICS
+        ),
+        "return_semantics": (
+            EXPECTED_RETURN_SEMANTICS
+        ),
+        (
+            "corporate_action_value_semantics"
+        ): (
+            EXPECTED_CORPORATE_ACTION_VALUE_SEMANTICS
+        ),
+    }
+
+    for (
+        field,
+        expected_value,
+    ) in expected_source_contract.items():
+        compare_summary_value(
+            checks,
+            (
+                "walk_forward."
+                f"source_contract.{field}"
+            ),
+            source_contract.get(
+                field
+            ),
+            expected_value,
+        )
+
+    compare_summary_value(
+        checks,
+        "walk_forward.test_policy",
+        summary.get(
+            "test_policy"
+        ),
+        EXPECTED_WALK_FORWARD_TEST_POLICY,
+    )
+
+    compare_summary_value(
+        checks,
+        (
+            "walk_forward."
+            "test_features_used"
+        ),
+        summary.get(
+            "test_features_used"
+        ),
+        False,
+    )
+
+    compare_summary_value(
+        checks,
+        (
+            "walk_forward."
+            "test_targets_used"
+        ),
+        summary.get(
+            "test_targets_used"
+        ),
+        False,
+    )
+
+    compare_summary_value(
+        checks,
+        (
+            "walk_forward."
+            "test_predictions_generated"
+        ),
+        summary.get(
+            "test_predictions_generated"
+        ),
+        False,
+    )
+
+    # --------------------------------------------------------
+    # Parquet structure
+    # --------------------------------------------------------
+
+    versions = unique_values(
+        metrics,
+        "walk_forward_version",
+    )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward.metrics_version"
+            ),
+            status=(
+                "PASS"
+                if versions
+                == [
+                    EXPECTED_WALK_FORWARD_VERSION
+                ]
+                else "FAIL"
+            ),
+            message=(
+                "Walk-Forward version correta "
+                "no fold_metrics.parquet."
+                if versions
+                == [
+                    EXPECTED_WALK_FORWARD_VERSION
+                ]
+                else (
+                    "Walk-Forward version "
+                    "incompatível no Parquet."
+                )
+            ),
+            expected=(
+                EXPECTED_WALK_FORWARD_VERSION
+            ),
+            found=versions,
+        )
+    )
+
+    fold_ids = sorted(
+        int(
+            value
+        )
+        for value
+        in metrics[
+            "fold_id"
+        ]
+        .dropna()
+        .unique()
+        .tolist()
+    )
+
+    expected_fold_ids = list(
+        range(
+            1,
+            EXPECTED_WALK_FORWARD_FOLDS
+            + 1,
+        )
+    )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward.fold_ids"
+            ),
+            status=(
+                "PASS"
+                if fold_ids
+                == expected_fold_ids
+                else "FAIL"
+            ),
+            message=(
+                "Fold IDs completos e sequenciais."
+                if fold_ids
+                == expected_fold_ids
+                else (
+                    "Fold IDs incompletos ou "
+                    "não sequenciais."
+                )
+            ),
+            expected=expected_fold_ids,
+            found=fold_ids,
+        )
+    )
+
+    parquet_models = tuple(
+        sorted(
+            str(
+                value
+            )
+            for value
+            in metrics[
+                "model"
+            ]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+    )
+
+    expected_models_sorted = tuple(
+        sorted(
+            EXPECTED_WALK_FORWARD_MODELS
+        )
+    )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward.models"
+            ),
+            status=(
+                "PASS"
+                if parquet_models
+                == expected_models_sorted
+                else "FAIL"
+            ),
+            message=(
+                "Conjunto de modelos correto."
+                if parquet_models
+                == expected_models_sorted
+                else (
+                    "Conjunto de modelos "
+                    "incompatível."
+                )
+            ),
+            expected=list(
+                expected_models_sorted
+            ),
+            found=list(
+                parquet_models
+            ),
+        )
+    )
+
+    expected_rows = (
+        EXPECTED_WALK_FORWARD_FOLDS
+        * len(
+            EXPECTED_WALK_FORWARD_MODELS
+        )
+    )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward.metrics_row_count"
+            ),
+            status=(
+                "PASS"
+                if len(
+                    metrics
+                )
+                == expected_rows
+                else "FAIL"
+            ),
+            message=(
+                "Quantidade de métricas "
+                "por fold/model correta."
+                if len(
+                    metrics
+                )
+                == expected_rows
+                else (
+                    "Quantidade inesperada "
+                    "de métricas."
+                )
+            ),
+            expected=expected_rows,
+            found=len(
+                metrics
+            ),
+        )
+    )
+
+    combinations = (
+        metrics.groupby(
+            [
+                "fold_id",
+                "model",
+            ],
+            dropna=False,
+        )
+        .size()
+    )
+
+    combination_ok = bool(
+        (
+            combinations
+            == 1
+        ).all()
+        and len(
+            combinations
+        )
+        == expected_rows
+    )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward."
+                "fold_model_uniqueness"
+            ),
+            status=(
+                "PASS"
+                if combination_ok
+                else "FAIL"
+            ),
+            message=(
+                "Existe exatamente um "
+                "resultado por fold/model."
+                if combination_ok
+                else (
+                    "Combinação fold/model "
+                    "duplicada ou ausente."
+                )
+            ),
+        )
+    )
+
+    validation_session_values = (
+        unique_values(
+            metrics,
+            "validation_feature_sessions",
+        )
+    )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward."
+                "validation_sessions_contract"
+            ),
+            status=(
+                "PASS"
+                if validation_session_values
+                == [
+                    EXPECTED_WALK_FORWARD_VALIDATION_SESSIONS
+                ]
+                else "FAIL"
+            ),
+            message=(
+                "Validation sessions por fold "
+                "corretas."
+                if validation_session_values
+                == [
+                    EXPECTED_WALK_FORWARD_VALIDATION_SESSIONS
+                ]
+                else (
+                    "Validation sessions por "
+                    "fold incompatíveis."
+                )
+            ),
+            expected=(
+                EXPECTED_WALK_FORWARD_VALIDATION_SESSIONS
+            ),
+            found=validation_session_values,
+        )
+    )
+
+    observed_feature_date_counts = (
+        sorted(
+            int(
+                value
+            )
+            for value
+            in metrics[
+                "validation_feature_dates"
+            ]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+    )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward."
+                "validation_feature_dates"
+            ),
+            status=(
+                "PASS"
+                if observed_feature_date_counts
+                == [
+                    EXPECTED_WALK_FORWARD_VALIDATION_SESSIONS
+                ]
+                else "FAIL"
+            ),
+            message=(
+                "Quantidade de datas de "
+                "validation por fold correta."
+                if observed_feature_date_counts
+                == [
+                    EXPECTED_WALK_FORWARD_VALIDATION_SESSIONS
+                ]
+                else (
+                    "Quantidade de datas de "
+                    "validation incompatível."
+                )
+            ),
+            expected=(
+                EXPECTED_WALK_FORWARD_VALIDATION_SESSIONS
+            ),
+            found=observed_feature_date_counts,
+        )
+    )
+
+    # --------------------------------------------------------
+    # Temporal integrity / leakage
+    # --------------------------------------------------------
+
+    temporal = (
+        metrics[
+            [
+                "fold_id",
+                "train_target_max",
+                "validation_start",
+                "validation_end",
+                "validation_target_max",
+            ]
+        ]
+        .drop_duplicates(
+            subset=[
+                "fold_id",
+            ]
+        )
+        .sort_values(
+            "fold_id"
+        )
+        .copy()
+    )
+
+    for column in (
+        "train_target_max",
+        "validation_start",
+        "validation_end",
+        "validation_target_max",
+    ):
+        temporal[
+            column
+        ] = pd.to_datetime(
+            temporal[
+                column
+            ],
+            errors="coerce",
+        )
+
+    invalid_temporal_dates = int(
+        temporal[
+            [
+                "train_target_max",
+                "validation_start",
+                "validation_end",
+                "validation_target_max",
+            ]
+        ]
+        .isna()
+        .sum()
+        .sum()
+    )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward.temporal_dates"
+            ),
+            status=(
+                "PASS"
+                if invalid_temporal_dates == 0
+                else "FAIL"
+            ),
+            message=(
+                "Datas temporais dos folds "
+                "são válidas."
+                if invalid_temporal_dates == 0
+                else (
+                    "Datas temporais inválidas "
+                    "nos folds."
+                )
+            ),
+            invalid_date_count=(
+                invalid_temporal_dates
+            ),
+        )
+    )
+
+    if invalid_temporal_dates == 0:
+        purge_violations = int(
+            (
+                temporal[
+                    "train_target_max"
+                ]
+                >= temporal[
+                    "validation_start"
+                ]
+            ).sum()
+        )
+
+        checks.append(
+            build_check(
+                name=(
+                    "walk_forward.purge"
+                ),
+                status=(
+                    "PASS"
+                    if purge_violations == 0
+                    else "FAIL"
+                ),
+                message=(
+                    "Todos os folds respeitam "
+                    "train_target_max < "
+                    "validation_start."
+                    if purge_violations == 0
+                    else (
+                        "Existem violações de "
+                        "purge temporal."
+                    )
+                ),
+                purge_violations=(
+                    purge_violations
+                ),
+            )
+        )
+
+        validation_order_violations = 0
+
+        temporal_records = (
+            temporal.to_dict(
+                orient="records"
+            )
+        )
+
+        for index in range(
+            1,
+            len(
+                temporal_records
+            ),
+        ):
+            previous_end = pd.Timestamp(
+                temporal_records[
+                    index - 1
+                ][
+                    "validation_end"
+                ]
+            )
+
+            current_start = pd.Timestamp(
+                temporal_records[
+                    index
+                ][
+                    "validation_start"
+                ]
+            )
+
+            if not (
+                previous_end
+                < current_start
+            ):
+                validation_order_violations += 1
+
+        checks.append(
+            build_check(
+                name=(
+                    "walk_forward."
+                    "validation_non_overlap"
+                ),
+                status=(
+                    "PASS"
+                    if (
+                        validation_order_violations
+                        == 0
+                    )
+                    else "FAIL"
+                ),
+                message=(
+                    "Janelas de validation "
+                    "não se sobrepõem."
+                    if (
+                        validation_order_violations
+                        == 0
+                    )
+                    else (
+                        "Há sobreposição entre "
+                        "janelas de validation."
+                    )
+                ),
+                overlap_violations=(
+                    validation_order_violations
+                ),
+            )
+        )
+
+        try:
+            test_start = pd.Timestamp(
+                summary.get(
+                    "test_start"
+                )
+            )
+
+        except Exception:
+            test_start = pd.NaT
+
+        test_start_valid = bool(
+            not pd.isna(
+                test_start
+            )
+        )
+
+        checks.append(
+            build_check(
+                name=(
+                    "walk_forward.test_start"
+                ),
+                status=(
+                    "PASS"
+                    if test_start_valid
+                    else "FAIL"
+                ),
+                message=(
+                    "TEST boundary válida."
+                    if test_start_valid
+                    else (
+                        "TEST boundary inválida."
+                    )
+                ),
+                found=summary.get(
+                    "test_start"
+                ),
+            )
+        )
+
+        if test_start_valid:
+            validation_end_max = pd.Timestamp(
+                temporal[
+                    "validation_end"
+                ].max()
+            )
+
+            validation_target_max = pd.Timestamp(
+                temporal[
+                    "validation_target_max"
+                ].max()
+            )
+
+            feature_holdout_ok = (
+                validation_end_max
+                < test_start
+            )
+
+            target_holdout_ok = (
+                validation_target_max
+                < test_start
+            )
+
+            checks.append(
+                build_check(
+                    name=(
+                        "walk_forward."
+                        "validation_before_test"
+                    ),
+                    status=(
+                        "PASS"
+                        if feature_holdout_ok
+                        else "FAIL"
+                    ),
+                    message=(
+                        "Todas as features de "
+                        "validation terminam antes "
+                        "do TEST."
+                        if feature_holdout_ok
+                        else (
+                            "Validation invade "
+                            "a fronteira do TEST."
+                        )
+                    ),
+                    validation_end_max=(
+                        validation_end_max
+                        .date()
+                        .isoformat()
+                    ),
+                    test_start=(
+                        test_start
+                        .date()
+                        .isoformat()
+                    ),
+                )
+            )
+
+            checks.append(
+                build_check(
+                    name=(
+                        "walk_forward."
+                        "validation_target_before_test"
+                    ),
+                    status=(
+                        "PASS"
+                        if target_holdout_ok
+                        else "FAIL"
+                    ),
+                    message=(
+                        "Todos os targets de "
+                        "validation terminam antes "
+                        "do TEST."
+                        if target_holdout_ok
+                        else (
+                            "Targets de validation "
+                            "invadem o TEST."
+                        )
+                    ),
+                    validation_target_max=(
+                        validation_target_max
+                        .date()
+                        .isoformat()
+                    ),
+                    test_start=(
+                        test_start
+                        .date()
+                        .isoformat()
+                    ),
+                )
+            )
+
+    # --------------------------------------------------------
+    # Metrics integrity
+    # --------------------------------------------------------
+
+    metric_columns = (
+        "mae",
+        "rmse",
+        "r2",
+        "majority_directional_accuracy",
+        "directional_accuracy",
+        "directional_lift",
+        "prediction_mean",
+        "prediction_median",
+        "prediction_min",
+        "prediction_max",
+    )
+
+    nonfinite_counts: dict[
+        str,
+        int,
+    ] = {}
+
+    for column in metric_columns:
+        numeric = pd.to_numeric(
+            metrics[
+                column
+            ],
+            errors="coerce",
+        )
+
+        nonfinite_count = int(
+            (
+                ~np.isfinite(
+                    numeric.to_numpy(
+                        dtype=float
+                    )
+                )
+            ).sum()
+        )
+
+        if nonfinite_count > 0:
+            nonfinite_counts[
+                column
+            ] = nonfinite_count
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward.metrics_finite"
+            ),
+            status=(
+                "PASS"
+                if not nonfinite_counts
+                else "FAIL"
+            ),
+            message=(
+                "Todas as métricas são finitas."
+                if not nonfinite_counts
+                else (
+                    "Há métricas nulas ou "
+                    "não finitas."
+                )
+            ),
+            nonfinite_counts=(
+                nonfinite_counts
+            ),
+        )
+    )
+
+    mae_negative = int(
+        (
+            pd.to_numeric(
+                metrics[
+                    "mae"
+                ],
+                errors="coerce",
+            )
+            < 0
+        ).sum()
+    )
+
+    rmse_negative = int(
+        (
+            pd.to_numeric(
+                metrics[
+                    "rmse"
+                ],
+                errors="coerce",
+            )
+            < 0
+        ).sum()
+    )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward."
+                "regression_metric_ranges"
+            ),
+            status=(
+                "PASS"
+                if (
+                    mae_negative == 0
+                    and rmse_negative == 0
+                )
+                else "FAIL"
+            ),
+            message=(
+                "MAE/RMSE possuem faixa válida."
+                if (
+                    mae_negative == 0
+                    and rmse_negative == 0
+                )
+                else (
+                    "MAE/RMSE possuem valores "
+                    "negativos inválidos."
+                )
+            ),
+            negative_mae=mae_negative,
+            negative_rmse=rmse_negative,
+        )
+    )
+
+    direction_range_violations = 0
+
+    for column in (
+        "majority_directional_accuracy",
+        "directional_accuracy",
+    ):
+        numeric = pd.to_numeric(
+            metrics[
+                column
+            ],
+            errors="coerce",
+        )
+
+        direction_range_violations += int(
+            (
+                (numeric < 0)
+                | (numeric > 1)
+            ).sum()
+        )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward."
+                "directional_metric_ranges"
+            ),
+            status=(
+                "PASS"
+                if (
+                    direction_range_violations
+                    == 0
+                )
+                else "FAIL"
+            ),
+            message=(
+                "Directional accuracies estão "
+                "entre 0 e 1."
+                if (
+                    direction_range_violations
+                    == 0
+                )
+                else (
+                    "Directional accuracy fora "
+                    "da faixa [0, 1]."
+                )
+            ),
+            violations=(
+                direction_range_violations
+            ),
+        )
+    )
+
+    # --------------------------------------------------------
+    # Summary <-> Parquet reconciliation
+    # --------------------------------------------------------
+
+    summary_models = summary.get(
+        "models",
+        {},
+    )
+
+    summary_model_names = tuple(
+        sorted(
+            summary_models.keys()
+        )
+    )
+
+    checks.append(
+        build_check(
+            name=(
+                "walk_forward."
+                "summary_models_reconciliation"
+            ),
+            status=(
+                "PASS"
+                if summary_model_names
+                == expected_models_sorted
+                else "FAIL"
+            ),
+            message=(
+                "Modelos do summary.json "
+                "reconciliados com o Parquet."
+                if summary_model_names
+                == expected_models_sorted
+                else (
+                    "Modelos do summary.json "
+                    "divergem do Parquet."
+                )
+            ),
+            expected=list(
+                expected_models_sorted
+            ),
+            found=list(
+                summary_model_names
+            ),
+        )
+    )
+
+    for model_name in (
+        EXPECTED_WALK_FORWARD_MODELS
+    ):
+        model_rows = metrics.loc[
+            metrics[
+                "model"
+            ]
+            == model_name
+        ].copy()
+
+        model_summary = summary_models.get(
+            model_name,
+            {},
+        )
+
+        compare_summary_value(
+            checks,
+            (
+                "walk_forward."
+                f"{model_name}.folds"
+            ),
+            model_summary.get(
+                "folds"
+            ),
+            len(
+                model_rows
+            ),
+        )
+
+        aggregate_metrics = {
+            "mae_mean": float(
+                model_rows[
+                    "mae"
+                ].mean()
+            ),
+            "mae_median": float(
+                model_rows[
+                    "mae"
+                ].median()
+            ),
+            "mae_std": float(
+                model_rows[
+                    "mae"
+                ].std(
+                    ddof=0
+                )
+            ),
+            "rmse_mean": float(
+                model_rows[
+                    "rmse"
+                ].mean()
+            ),
+            "rmse_median": float(
+                model_rows[
+                    "rmse"
+                ].median()
+            ),
+            "rmse_std": float(
+                model_rows[
+                    "rmse"
+                ].std(
+                    ddof=0
+                )
+            ),
+            "r2_mean": float(
+                model_rows[
+                    "r2"
+                ].mean()
+            ),
+            "r2_median": float(
+                model_rows[
+                    "r2"
+                ].median()
+            ),
+            (
+                "directional_accuracy_mean"
+            ): float(
+                model_rows[
+                    "directional_accuracy"
+                ].mean()
+            ),
+            (
+                "directional_accuracy_median"
+            ): float(
+                model_rows[
+                    "directional_accuracy"
+                ].median()
+            ),
+            "directional_lift_mean": float(
+                model_rows[
+                    "directional_lift"
+                ].mean()
+            ),
+            "directional_lift_median": float(
+                model_rows[
+                    "directional_lift"
+                ].median()
+            ),
+        }
+
+        for (
+            metric_name,
+            expected_value,
+        ) in aggregate_metrics.items():
+            compare_float_value(
+                checks,
+                (
+                    "walk_forward."
+                    f"{model_name}."
+                    f"{metric_name}"
+                ),
+                model_summary.get(
+                    metric_name
+                ),
+                expected_value,
+            )
+
+        positive_lift = int(
+            (
+                model_rows[
+                    "directional_lift"
+                ]
+                > 0
+            ).sum()
+        )
+
+        positive_r2 = int(
+            (
+                model_rows[
+                    "r2"
+                ]
+                > 0
+            ).sum()
+        )
+
+        compare_summary_value(
+            checks,
+            (
+                "walk_forward."
+                f"{model_name}."
+                "positive_directional_lift_folds"
+            ),
+            model_summary.get(
+                "positive_directional_lift_folds"
+            ),
+            positive_lift,
+        )
+
+        compare_summary_value(
+            checks,
+            (
+                "walk_forward."
+                f"{model_name}."
+                "non_positive_directional_lift_folds"
+            ),
+            model_summary.get(
+                "non_positive_directional_lift_folds"
+            ),
+            (
+                len(
+                    model_rows
+                )
+                - positive_lift
+            ),
+        )
+
+        compare_summary_value(
+            checks,
+            (
+                "walk_forward."
+                f"{model_name}."
+                "positive_r2_folds"
+            ),
+            model_summary.get(
+                "positive_r2_folds"
+            ),
+            positive_r2,
+        )
+
+        compare_summary_value(
+            checks,
+            (
+                "walk_forward."
+                f"{model_name}."
+                "non_positive_r2_folds"
+            ),
+            model_summary.get(
+                "non_positive_r2_folds"
+            ),
+            (
+                len(
+                    model_rows
+                )
+                - positive_r2
+            ),
+        )
+
+    return (
+        checks,
+        summary,
+    )
+
+
+# ============================================================
 # Overall status
 # ============================================================
 
@@ -2919,7 +4569,8 @@ def main() -> None:
     print(
         "Freshness semantics: "
         "DATA_DATE / TARGET_DATE / "
-        "EVENT_DRIVEN / HISTORICAL_SPLIT"
+        "EVENT_DRIVEN / HISTORICAL_SPLIT / "
+        "HISTORICAL_EXPERIMENT"
     )
 
     dataset_results: list[
@@ -2989,6 +4640,17 @@ def main() -> None:
         validate_temporal_splits(
             loaded_datasets
         )
+    )
+
+    (
+        walk_forward_checks,
+        walk_forward_summary,
+    ) = validate_walk_forward(
+        loaded_datasets
+    )
+
+    platform_checks.extend(
+        walk_forward_checks
     )
 
     print_platform_checks(
@@ -3069,6 +4731,13 @@ def main() -> None:
                 "split boundaries, purge "
                 "and overlap checks."
             ),
+            "HISTORICAL_EXPERIMENT": (
+                "Health is governed by "
+                "experiment contracts, "
+                "temporal integrity, holdout "
+                "protection and metric "
+                "reconciliation."
+            ),
         },
         "overall_status": (
             overall_status
@@ -3098,6 +4767,9 @@ def main() -> None:
         },
         "platform_checks": (
             platform_checks
+        ),
+        "walk_forward_summary": (
+            walk_forward_summary
         ),
     }
 
