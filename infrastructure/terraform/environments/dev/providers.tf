@@ -4,7 +4,7 @@ provider "aws" {
   default_tags {
     tags = {
       Project     = "fii-data-ai-platform"
-      Environment = var.environment
+      Environment = "dev"
       ManagedBy   = "terraform"
     }
   }
