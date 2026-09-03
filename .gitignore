@@ -50,3 +50,6 @@ airflow/airflow-webserver.pid
 dist/
 build/
 *.egg-info/
+
+# Corporate action migration backups
+config/corporate_actions/backups/
