@@ -56,7 +56,8 @@ resource "aws_iam_policy" "phase1_admin" {
           "iam:GetPolicy",
           "iam:GetPolicyVersion",
           "iam:ListPolicyVersions",
-          "iam:ListEntitiesForPolicy"
+          "iam:ListEntitiesForPolicy",
+          "iam:ListPolicyTags"
         ]
 
         Resource = "*"
@@ -74,7 +75,9 @@ resource "aws_iam_policy" "phase1_admin" {
           "iam:AttachGroupPolicy",
           "iam:DetachGroupPolicy",
           "iam:AddUserToGroup",
-          "iam:RemoveUserFromGroup"
+          "iam:RemoveUserFromGroup",
+          "iam:TagPolicy",
+          "iam:UntagPolicy"
         ]
 
         Resource = "*"
@@ -91,11 +94,6 @@ resource "aws_iam_policy" "phase1_admin" {
       }
     ]
   })
-}
-
-resource "aws_iam_group_policy_attachment" "administrator_access" {
-  group      = aws_iam_group.platform_admins.name
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 
 resource "aws_iam_group_policy_attachment" "phase1_admin" {
