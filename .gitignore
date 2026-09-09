@@ -34,7 +34,6 @@ crash.log
 crash.*.log
 *.tfvars
 !*.tfvars.example
-.terraform.lock.hcl
 
 # Airflow
 airflow/logs/
