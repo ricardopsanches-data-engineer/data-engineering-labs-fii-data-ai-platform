@@ -31,6 +31,52 @@ resource "aws_iam_policy" "phase1_admin" {
         ]
       },
       {
+        Sid    = "AuditBucketManagement"
+        Effect = "Allow"
+
+        Action = [
+          "s3:*"
+        ]
+
+        Resource = [
+          "arn:aws:s3:::fii-data-ai-platform-audit-625685670804",
+          "arn:aws:s3:::fii-data-ai-platform-audit-625685670804/*"
+        ]
+      },
+      {
+        Sid    = "S3GlobalRead"
+        Effect = "Allow"
+
+        Action = [
+          "s3:ListAllMyBuckets"
+        ]
+
+        Resource = "*"
+      },
+      {
+        Sid    = "CloudTrailManagement"
+        Effect = "Allow"
+
+        Action = [
+          "cloudtrail:CreateTrail",
+          "cloudtrail:UpdateTrail",
+          "cloudtrail:DeleteTrail",
+          "cloudtrail:GetTrail",
+          "cloudtrail:GetTrailStatus",
+          "cloudtrail:DescribeTrails",
+          "cloudtrail:ListTrails",
+          "cloudtrail:StartLogging",
+          "cloudtrail:StopLogging",
+          "cloudtrail:PutEventSelectors",
+          "cloudtrail:GetEventSelectors",
+          "cloudtrail:AddTags",
+          "cloudtrail:RemoveTags",
+          "cloudtrail:ListTags"
+        ]
+
+        Resource = "*"
+      },
+      {
         Sid    = "BudgetManagement"
         Effect = "Allow"
 
