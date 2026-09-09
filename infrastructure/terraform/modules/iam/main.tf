@@ -36,7 +36,10 @@ resource "aws_iam_policy" "phase1_admin" {
 
         Action = [
           "budgets:ViewBudget",
-          "budgets:ModifyBudget"
+          "budgets:ModifyBudget",
+          "budgets:ListTagsForResource",
+          "budgets:TagResource",
+          "budgets:UntagResource"
         ]
 
         Resource = "*"
@@ -47,7 +50,7 @@ resource "aws_iam_policy" "phase1_admin" {
 
         Action = [
           "iam:GetGroup",
-          "iam:GetGroupsForUser",
+          "iam:ListGroupsForUser",
           "iam:ListGroups",
           "iam:ListAttachedGroupPolicies",
           "iam:ListAttachedUserPolicies",
