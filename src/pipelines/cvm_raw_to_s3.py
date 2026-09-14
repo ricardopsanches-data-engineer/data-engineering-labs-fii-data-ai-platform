@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import date
 
 from src.ingestion.cvm.client import download_cvm_fund_register
 from src.storage.s3 import upload_file
 
-BUCKET_NAME = "fii-data-ai-platform-dev-datalake-625685670804"
+BUCKET_NAME = os.environ.get(
+    "FII_DATA_LAKE_BUCKET",
+    "fii-data-ai-platform-dev-datalake-625685670804",
+)
 
 
 def ingest_daily(

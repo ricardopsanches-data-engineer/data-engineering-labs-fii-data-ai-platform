@@ -50,5 +50,13 @@ dist/
 build/
 *.egg-info/
 
+# AWS Lambda build artifacts
+lambda/daily-ingestion/package/
+lambda/daily-ingestion/build/
+**/lambda-response.json
+
+# Temporary investigation files
+tmp/
+
 # Corporate action migration backups
 config/corporate_actions/backups/

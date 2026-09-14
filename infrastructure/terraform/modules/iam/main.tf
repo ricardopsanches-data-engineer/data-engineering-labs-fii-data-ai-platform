@@ -145,6 +145,111 @@ resource "aws_iam_policy" "phase1_admin" {
         Resource = "*"
       },
       {
+        Sid    = "LambdaExecutionRoleRead"
+        Effect = "Allow"
+
+        Action = [
+          "iam:GetRole",
+          "iam:ListAttachedRolePolicies",
+          "iam:ListRolePolicies",
+          "iam:ListInstanceProfilesForRole",
+          "iam:ListRoleTags"
+        ]
+
+        Resource = [
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-daily-ingestion-execution-role"
+        ]
+      },
+      {
+        Sid    = "LambdaExecutionRoleManagement"
+        Effect = "Allow"
+
+        Action = [
+          "iam:CreateRole",
+          "iam:DeleteRole",
+          "iam:UpdateAssumeRolePolicy",
+          "iam:TagRole",
+          "iam:UntagRole",
+          "iam:AttachRolePolicy",
+          "iam:DetachRolePolicy"
+        ]
+
+        Resource = [
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-daily-ingestion-execution-role"
+        ]
+      },
+      {
+        Sid    = "LambdaPassExecutionRole"
+        Effect = "Allow"
+
+        Action = [
+          "iam:PassRole"
+        ]
+
+        Resource = [
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-daily-ingestion-execution-role"
+        ]
+
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "lambda.amazonaws.com"
+          }
+        }
+      },
+      {
+        Sid    = "LambdaFunctionManagement"
+        Effect = "Allow"
+
+        Action = [
+          "lambda:CreateFunction",
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:GetFunctionConcurrency",
+          "lambda:GetFunctionCodeSigningConfig",
+          "lambda:GetRuntimeManagementConfig",
+          "lambda:ListVersionsByFunction",
+          "lambda:UpdateFunctionCode",
+          "lambda:UpdateFunctionConfiguration",
+          "lambda:DeleteFunction",
+          "lambda:InvokeFunction",
+          "lambda:ListTags",
+          "lambda:TagResource",
+          "lambda:UntagResource"
+        ]
+
+        Resource = [
+          "arn:aws:lambda:sa-east-1:625685670804:function:fii-data-ai-platform-dev-daily-ingestion"
+        ]
+      },
+      {
+        Sid    = "CloudWatchLogsRead"
+        Effect = "Allow"
+
+        Action = [
+          "logs:DescribeLogGroups"
+        ]
+
+        Resource = "*"
+      },
+      {
+        Sid    = "LambdaLogGroupManagement"
+        Effect = "Allow"
+
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:DeleteLogGroup",
+          "logs:PutRetentionPolicy",
+          "logs:DeleteRetentionPolicy",
+          "logs:ListTagsForResource",
+          "logs:TagResource",
+          "logs:UntagResource"
+        ]
+
+        Resource = [
+          "arn:aws:logs:sa-east-1:625685670804:log-group:/aws/lambda/fii-data-ai-platform-dev-daily-ingestion*"
+        ]
+      },
+      {
         Sid    = "IdentityVerification"
         Effect = "Allow"
 

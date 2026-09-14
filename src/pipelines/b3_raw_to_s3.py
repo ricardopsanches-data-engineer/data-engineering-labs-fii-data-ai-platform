@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import date, timedelta
 
 from src.ingestion.b3.client import (
@@ -8,9 +9,44 @@ from src.ingestion.b3.client import (
     download_b3_file,
     download_latest_trading_days,
 )
+from src.ingestion.b3.fingerprint import calculate_b3_content_sha256
 from src.storage.s3 import upload_file
 
-BUCKET_NAME = "fii-data-ai-platform-dev-datalake-625685670804"
+BUCKET_NAME = os.environ.get(
+    "FII_DATA_LAKE_BUCKET",
+    "fii-data-ai-platform-dev-datalake-625685670804",
+)
+
+
+def upload_b3_file(
+    local_path,
+    force: bool = False,
+) -> None:
+    """
+    Calcula o fingerprint lógico da B3
+    e envia o RAW para o S3.
+
+    O storage passa a comparar:
+
+    - SHA físico do RAW externo;
+    - SHA lógico do XML interno.
+    """
+
+    content_sha256 = calculate_b3_content_sha256(
+        local_path
+    )
+
+    print(
+        "Fingerprint lógico B3 | "
+        f"content_sha256={content_sha256}"
+    )
+
+    upload_file(
+        local_path=local_path,
+        bucket_name=BUCKET_NAME,
+        content_sha256=content_sha256,
+        force=force,
+    )
 
 
 def ingest_daily(
@@ -33,9 +69,8 @@ def ingest_daily(
     )
 
     for local_path in files:
-        upload_file(
+        upload_b3_file(
             local_path=local_path,
-            bucket_name=BUCKET_NAME,
             force=force,
         )
 
@@ -69,9 +104,8 @@ def ingest_single_date(
             f"para {trade_date}."
         )
 
-    upload_file(
+    upload_b3_file(
         local_path=local_path,
-        bucket_name=BUCKET_NAME,
         force=force,
     )
 
@@ -139,9 +173,8 @@ def ingest_backfill(
             current_date += timedelta(days=1)
             continue
 
-        upload_file(
+        upload_b3_file(
             local_path=local_path,
-            bucket_name=BUCKET_NAME,
             force=force,
         )
 

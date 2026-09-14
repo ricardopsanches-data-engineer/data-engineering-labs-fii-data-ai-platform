@@ -25,13 +25,42 @@ module "observability" {
 module "s3_data_lake" {
   source = "../../modules/s3-data-lake"
 
-  project_name  = "fii-data-ai-platform"
-  environment   = "dev"
-  bucket_name   = "fii-data-ai-platform-dev-datalake-625685670804"
+  project_name = "fii-data-ai-platform"
+  environment  = "dev"
+
+  bucket_name = "fii-data-ai-platform-dev-datalake-625685670804"
+
   force_destroy = false
 
   tags = {
     Owner = "DataEngineering"
     Layer = "DataLake"
+  }
+}
+
+module "lambda_ingestion" {
+  source = "../../modules/lambda-ingestion"
+
+  function_name = "fii-data-ai-platform-dev-daily-ingestion"
+
+  filename = "../../../../lambda/daily-ingestion/build/daily_ingestion.zip"
+
+  source_code_hash = filebase64sha256(
+    "../../../../lambda/daily-ingestion/build/daily_ingestion.zip"
+  )
+
+  data_lake_bucket_name = module.s3_data_lake.bucket_name
+  data_lake_bucket_arn  = module.s3_data_lake.bucket_arn
+
+  timeout     = 60
+  memory_size = 512
+
+  log_retention_days = 14
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "DailyIngestion"
+    ManagedBy   = "Terraform"
   }
 }
