@@ -3,6 +3,11 @@ name = "fii-data-ai-platform"
 version = "0.1.0"
 description = "Modern Data & AI platform for Brazilian Real Estate Investment Funds (FIIs)."
 requires-python = ">=3.12"
+dependencies = [
+    "boto3",
+    "botocore[crt]",
+    "requests",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

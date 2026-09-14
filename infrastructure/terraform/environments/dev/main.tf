@@ -21,3 +21,17 @@ module "observability" {
   audit_bucket_name  = "fii-data-ai-platform-audit-625685670804"
   log_retention_days = 365
 }
+
+module "s3_data_lake" {
+  source = "../../modules/s3-data-lake"
+
+  project_name  = "fii-data-ai-platform"
+  environment   = "dev"
+  bucket_name   = "fii-data-ai-platform-dev-datalake-625685670804"
+  force_destroy = false
+
+  tags = {
+    Owner = "DataEngineering"
+    Layer = "DataLake"
+  }
+}

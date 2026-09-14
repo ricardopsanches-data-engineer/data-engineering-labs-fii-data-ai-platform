@@ -54,6 +54,19 @@ resource "aws_iam_policy" "phase1_admin" {
         Resource = "*"
       },
       {
+        Sid    = "DataLakeBucketManagement"
+        Effect = "Allow"
+
+        Action = [
+          "s3:*"
+        ]
+
+        Resource = [
+          "arn:aws:s3:::fii-data-ai-platform-dev-datalake-625685670804",
+          "arn:aws:s3:::fii-data-ai-platform-dev-datalake-625685670804/*"
+        ]
+      },
+      {
         Sid    = "CloudTrailManagement"
         Effect = "Allow"
 
