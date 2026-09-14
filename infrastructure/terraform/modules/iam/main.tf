@@ -239,7 +239,10 @@ resource "aws_iam_policy" "phase1_admin" {
         Effect = "Allow"
 
         Action = [
-          "logs:DescribeLogGroups"
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams",
+          "logs:GetLogEvents",
+          "logs:FilterLogEvents"
         ]
 
         Resource = "*"
