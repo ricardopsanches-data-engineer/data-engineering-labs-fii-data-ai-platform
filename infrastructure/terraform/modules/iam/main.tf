@@ -13,7 +13,6 @@ resource "aws_iam_policy" "phase1_admin" {
       {
         Sid    = "TerraformStateS3"
         Effect = "Allow"
-
         Action = [
           "s3:ListBucket",
           "s3:GetBucketLocation",
@@ -24,7 +23,6 @@ resource "aws_iam_policy" "phase1_admin" {
           "s3:PutObject",
           "s3:DeleteObject"
         ]
-
         Resource = [
           "arn:aws:s3:::fii-data-ai-platform-tfstate-625685670804",
           "arn:aws:s3:::fii-data-ai-platform-tfstate-625685670804/*"
@@ -33,34 +31,22 @@ resource "aws_iam_policy" "phase1_admin" {
       {
         Sid    = "AuditBucketManagement"
         Effect = "Allow"
-
-        Action = [
-          "s3:*"
-        ]
-
+        Action = ["s3:*"]
         Resource = [
           "arn:aws:s3:::fii-data-ai-platform-audit-625685670804",
           "arn:aws:s3:::fii-data-ai-platform-audit-625685670804/*"
         ]
       },
       {
-        Sid    = "S3GlobalRead"
-        Effect = "Allow"
-
-        Action = [
-          "s3:ListAllMyBuckets"
-        ]
-
+        Sid      = "S3GlobalRead"
+        Effect   = "Allow"
+        Action   = ["s3:ListAllMyBuckets"]
         Resource = "*"
       },
       {
         Sid    = "DataLakeBucketManagement"
         Effect = "Allow"
-
-        Action = [
-          "s3:*"
-        ]
-
+        Action = ["s3:*"]
         Resource = [
           "arn:aws:s3:::fii-data-ai-platform-dev-datalake-625685670804",
           "arn:aws:s3:::fii-data-ai-platform-dev-datalake-625685670804/*"
@@ -69,7 +55,6 @@ resource "aws_iam_policy" "phase1_admin" {
       {
         Sid    = "CloudTrailManagement"
         Effect = "Allow"
-
         Action = [
           "cloudtrail:CreateTrail",
           "cloudtrail:UpdateTrail",
@@ -86,13 +71,11 @@ resource "aws_iam_policy" "phase1_admin" {
           "cloudtrail:RemoveTags",
           "cloudtrail:ListTags"
         ]
-
         Resource = "*"
       },
       {
         Sid    = "BudgetManagement"
         Effect = "Allow"
-
         Action = [
           "budgets:ViewBudget",
           "budgets:ModifyBudget",
@@ -100,13 +83,11 @@ resource "aws_iam_policy" "phase1_admin" {
           "budgets:TagResource",
           "budgets:UntagResource"
         ]
-
         Resource = "*"
       },
       {
         Sid    = "IamFoundationRead"
         Effect = "Allow"
-
         Action = [
           "iam:GetGroup",
           "iam:ListGroupsForUser",
@@ -121,13 +102,11 @@ resource "aws_iam_policy" "phase1_admin" {
           "iam:ListEntitiesForPolicy",
           "iam:ListPolicyTags"
         ]
-
         Resource = "*"
       },
       {
         Sid    = "IamFoundationManage"
         Effect = "Allow"
-
         Action = [
           "iam:CreatePolicy",
           "iam:DeletePolicy",
@@ -141,13 +120,11 @@ resource "aws_iam_policy" "phase1_admin" {
           "iam:TagPolicy",
           "iam:UntagPolicy"
         ]
-
         Resource = "*"
       },
       {
         Sid    = "LambdaExecutionRoleRead"
         Effect = "Allow"
-
         Action = [
           "iam:GetRole",
           "iam:ListAttachedRolePolicies",
@@ -155,7 +132,6 @@ resource "aws_iam_policy" "phase1_admin" {
           "iam:ListInstanceProfilesForRole",
           "iam:ListRoleTags"
         ]
-
         Resource = [
           "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-daily-ingestion-execution-role"
         ]
@@ -163,7 +139,6 @@ resource "aws_iam_policy" "phase1_admin" {
       {
         Sid    = "LambdaExecutionRoleManagement"
         Effect = "Allow"
-
         Action = [
           "iam:CreateRole",
           "iam:DeleteRole",
@@ -173,7 +148,6 @@ resource "aws_iam_policy" "phase1_admin" {
           "iam:AttachRolePolicy",
           "iam:DetachRolePolicy"
         ]
-
         Resource = [
           "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-daily-ingestion-execution-role"
         ]
@@ -181,15 +155,10 @@ resource "aws_iam_policy" "phase1_admin" {
       {
         Sid    = "LambdaPassExecutionRole"
         Effect = "Allow"
-
-        Action = [
-          "iam:PassRole"
-        ]
-
+        Action = ["iam:PassRole"]
         Resource = [
           "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-daily-ingestion-execution-role"
         ]
-
         Condition = {
           StringEquals = {
             "iam:PassedToService" = "lambda.amazonaws.com"
@@ -199,7 +168,6 @@ resource "aws_iam_policy" "phase1_admin" {
       {
         Sid    = "LambdaFunctionManagement"
         Effect = "Allow"
-
         Action = [
           "lambda:CreateFunction",
           "lambda:GetFunction",
@@ -216,25 +184,19 @@ resource "aws_iam_policy" "phase1_admin" {
           "lambda:TagResource",
           "lambda:UntagResource"
         ]
-
         Resource = [
           "arn:aws:lambda:sa-east-1:625685670804:function:fii-data-ai-platform-dev-daily-ingestion"
         ]
       },
       {
-        Sid    = "CloudWatchLogsRead"
-        Effect = "Allow"
-
-        Action = [
-          "logs:DescribeLogGroups"
-        ]
-
+        Sid      = "CloudWatchLogsRead"
+        Effect   = "Allow"
+        Action   = ["logs:DescribeLogGroups"]
         Resource = "*"
       },
       {
         Sid    = "LambdaLogGroupManagement"
         Effect = "Allow"
-
         Action = [
           "logs:CreateLogGroup",
           "logs:DeleteLogGroup",
@@ -244,19 +206,73 @@ resource "aws_iam_policy" "phase1_admin" {
           "logs:TagResource",
           "logs:UntagResource"
         ]
-
         Resource = [
           "arn:aws:logs:sa-east-1:625685670804:log-group:/aws/lambda/fii-data-ai-platform-dev-daily-ingestion*"
         ]
       },
       {
-        Sid    = "IdentityVerification"
+        Sid    = "SchedulerExecutionRoleRead"
         Effect = "Allow"
-
         Action = [
-          "sts:GetCallerIdentity"
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:ListAttachedRolePolicies",
+          "iam:ListRolePolicies",
+          "iam:ListInstanceProfilesForRole",
+          "iam:ListRoleTags"
         ]
-
+        Resource = [
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-daily-ingestion-role"
+        ]
+      },
+      {
+        Sid    = "SchedulerExecutionRoleManagement"
+        Effect = "Allow"
+        Action = [
+          "iam:CreateRole",
+          "iam:DeleteRole",
+          "iam:UpdateAssumeRolePolicy",
+          "iam:TagRole",
+          "iam:UntagRole",
+          "iam:PutRolePolicy",
+          "iam:DeleteRolePolicy"
+        ]
+        Resource = [
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-daily-ingestion-role"
+        ]
+      },
+      {
+        Sid    = "SchedulerPassExecutionRole"
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = [
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-daily-ingestion-role"
+        ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "scheduler.amazonaws.com"
+          }
+        }
+      },
+      {
+        Sid    = "EventBridgeSchedulerManagement"
+        Effect = "Allow"
+        Action = [
+          "scheduler:CreateSchedule",
+          "scheduler:GetSchedule",
+          "scheduler:UpdateSchedule",
+          "scheduler:DeleteSchedule"
+        ]
+        Resource = [
+          "arn:aws:scheduler:sa-east-1:625685670804:schedule/default/fii-data-ai-platform-dev-daily-ingestion"
+        ]
+      },
+      {
+        Sid      = "IdentityVerification"
+        Effect   = "Allow"
+        Action   = ["sts:GetCallerIdentity"]
         Resource = "*"
       }
     ]

@@ -64,3 +64,28 @@ module "lambda_ingestion" {
     ManagedBy   = "Terraform"
   }
 }
+
+module "eventbridge_scheduler" {
+  source = "../../modules/eventbridge-scheduler"
+
+  schedule_name = "fii-data-ai-platform-dev-daily-ingestion"
+
+  description = "Triggers the daily FII data ingestion Lambda on business days."
+
+  lambda_function_arn = module.lambda_ingestion.function_arn
+
+  schedule_expression = "cron(0 7 ? * MON-FRI *)"
+  schedule_timezone   = "America/Sao_Paulo"
+
+  enabled = true
+
+  maximum_event_age_seconds = 3600
+  maximum_retry_attempts    = 2
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "DailyIngestionScheduler"
+    ManagedBy   = "Terraform"
+  }
+}
