@@ -89,3 +89,15 @@ module "eventbridge_scheduler" {
     ManagedBy   = "Terraform"
   }
 }
+
+module "cloudwatch_dashboard" {
+  source = "../../modules/cloudwatch-dashboard"
+
+  dashboard_name = "fii-data-ai-platform-dev"
+
+  aws_region = var.aws_region
+
+  lambda_function_name = (
+    module.lambda_ingestion.function_name
+  )
+}

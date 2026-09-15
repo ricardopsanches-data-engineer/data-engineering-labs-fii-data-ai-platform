@@ -342,6 +342,19 @@ resource "aws_iam_policy" "phase1_admin" {
         ]
 
         Resource = "*"
+      },
+      {
+        Sid    = "CloudWatchDashboardManagement"
+        Effect = "Allow"
+
+        Action = [
+          "cloudwatch:ListDashboards",
+          "cloudwatch:GetDashboard",
+          "cloudwatch:PutDashboard",
+          "cloudwatch:DeleteDashboards"
+        ]
+
+        Resource = "*"
       }
     ]
   })
