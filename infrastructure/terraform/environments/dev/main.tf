@@ -97,8 +97,12 @@ module "cloudwatch_dashboard" {
 
   aws_region = var.aws_region
 
-  lambda_function_name = (
+  ingestion_lambda_function_name = (
     module.lambda_ingestion.function_name
+  )
+
+  b3_silver_lambda_function_name = (
+    module.lambda_b3_silver.function_name
   )
 }
 
@@ -130,7 +134,7 @@ module "lambda_b3_silver" {
   data_lake_bucket_arn  = module.s3_data_lake.bucket_arn
 
   timeout     = 120
-  memory_size = 1024
+  memory_size = 1536
 
   log_retention_days = 14
 

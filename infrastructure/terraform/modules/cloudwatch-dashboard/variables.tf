@@ -8,7 +8,12 @@ variable "aws_region" {
   type        = string
 }
 
-variable "lambda_function_name" {
-  description = "Lambda function monitored by the dashboard."
+variable "ingestion_lambda_function_name" {
+  description = "Daily ingestion Lambda function monitored by the dashboard."
+  type        = string
+}
+
+variable "b3_silver_lambda_function_name" {
+  description = "B3 RAW to Silver Lambda function monitored by the dashboard."
   type        = string
 }
