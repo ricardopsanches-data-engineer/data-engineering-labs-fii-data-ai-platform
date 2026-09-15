@@ -17,6 +17,15 @@ $namespace = "AWS/Lambda"
 
 $period = 3600
 
+$lambdaMemoryMb = 512
+$lambdaTimeoutSeconds = 60
+
+$memoryAttentionPercent = 80
+$durationAttentionPercent = 80
+
+$weekdayFreshnessThresholdHours = 30
+$weekendFreshnessThresholdHours = 80
+
 $endTime = (Get-Date).ToUniversalTime()
 
 $startTime = $endTime.AddHours(-24)
@@ -148,6 +157,31 @@ Write-Host (
 )
 
 Write-Host
+
+
+$nowLocal = Convert-ToSaoPaulo `
+    -UtcDate $endTime
+
+if ($null -eq $nowLocal) {
+    throw "Could not convert current time to Sao Paulo."
+}
+
+
+$isWeekend = (
+    $nowLocal.DayOfWeek -eq "Saturday" -or
+    $nowLocal.DayOfWeek -eq "Sunday"
+)
+
+if ($isWeekend) {
+    $freshnessThresholdHours = (
+        $weekendFreshnessThresholdHours
+    )
+}
+else {
+    $freshnessThresholdHours = (
+        $weekdayFreshnessThresholdHours
+    )
+}
 
 
 Write-Host "Reading Lambda logs..."
@@ -381,6 +415,7 @@ if (
 
 $executionUtc = $null
 $executionLocal = $null
+$executionAgeHours = $null
 
 if (
     $startLine -match
@@ -397,6 +432,11 @@ if (
 
     $executionLocal = Convert-ToSaoPaulo `
         -UtcDate $executionUtc
+
+    $executionAgeHours = (
+        $endTime -
+        $executionUtc
+    ).TotalHours
 }
 
 
@@ -549,6 +589,139 @@ if ($cvmObject) {
 }
 
 
+$memoryPercent = $null
+$durationPercent = $null
+
+if ($maxMemoryMb) {
+    $memoryPercent = (
+        $maxMemoryMb /
+        $lambdaMemoryMb
+    ) * 100
+}
+
+if ($durationMs) {
+    $durationPercent = (
+        $durationMs /
+        ($lambdaTimeoutSeconds * 1000)
+    ) * 100
+}
+
+
+$criticalReasons = @()
+$attentionReasons = @()
+$warningReasons = @()
+
+
+if ($lambdaStatus -ne "SUCCESS") {
+    $criticalReasons += (
+        "Latest Lambda execution is not SUCCESS."
+    )
+}
+
+if ($b3Status -ne "SUCCESS") {
+    $criticalReasons += (
+        "Latest B3 ingestion is not SUCCESS."
+    )
+}
+
+if ($cvmStatus -ne "SUCCESS") {
+    $criticalReasons += (
+        "Latest CVM ingestion is not SUCCESS."
+    )
+}
+
+
+if ($b3Action -eq "UNKNOWN") {
+    $attentionReasons += (
+        "B3 action could not be classified."
+    )
+}
+
+if ($cvmAction -eq "UNKNOWN") {
+    $attentionReasons += (
+        "CVM action could not be classified."
+    )
+}
+
+
+if ($throttles -gt 0) {
+    $attentionReasons += (
+        "Lambda throttles detected in the last 24 hours."
+    )
+}
+
+
+if (
+    $null -ne $executionAgeHours -and
+    $executionAgeHours -gt $freshnessThresholdHours
+) {
+    $attentionReasons += (
+        "Latest Lambda execution is older than " +
+        $freshnessThresholdHours +
+        " hours."
+    )
+}
+
+
+if (
+    $null -ne $b3FreshnessHours -and
+    $b3FreshnessHours -gt $freshnessThresholdHours
+) {
+    $attentionReasons += (
+        "B3 RAW freshness exceeded " +
+        $freshnessThresholdHours +
+        " hours."
+    )
+}
+
+
+if (
+    $null -ne $cvmFreshnessHours -and
+    $cvmFreshnessHours -gt $freshnessThresholdHours
+) {
+    $attentionReasons += (
+        "CVM RAW freshness exceeded " +
+        $freshnessThresholdHours +
+        " hours."
+    )
+}
+
+
+if (
+    $null -ne $memoryPercent -and
+    $memoryPercent -gt $memoryAttentionPercent
+) {
+    $attentionReasons += (
+        "Lambda memory usage exceeded " +
+        $memoryAttentionPercent +
+        "%."
+    )
+}
+
+
+if (
+    $null -ne $durationPercent -and
+    $durationPercent -gt $durationAttentionPercent
+) {
+    $attentionReasons += (
+        "Lambda duration exceeded " +
+        $durationAttentionPercent +
+        "% of configured timeout."
+    )
+}
+
+
+if ($errors -gt 0) {
+    $warningReasons += (
+        "Historical Lambda errors detected in the last 24 hours: " +
+        [math]::Round(
+            $errors,
+            0
+        )
+    )
+}
+
+
 Write-Host
 Write-Host "======================================"
 Write-Host "LATEST EXECUTION"
@@ -574,6 +747,17 @@ if ($executionLocal) {
         $executionLocal.ToString(
             "yyyy-MM-dd HH:mm:ss"
         )
+    )
+}
+
+if ($null -ne $executionAgeHours) {
+    Write-Host (
+        "Age:          " +
+        [math]::Round(
+            $executionAgeHours,
+            2
+        ) +
+        " hours"
     )
 }
 
@@ -618,6 +802,29 @@ if ($maxMemoryMb) {
         "Max Memory:   " +
         $maxMemoryMb +
         " MB"
+    )
+}
+
+if ($null -ne $memoryPercent) {
+    Write-Host (
+        "Memory Usage: " +
+        [math]::Round(
+            $memoryPercent,
+            2
+        ) +
+        "%"
+    )
+}
+
+if ($null -ne $durationPercent) {
+    Write-Host (
+        "Timeout Usage:" +
+        " " +
+        [math]::Round(
+            $durationPercent,
+            2
+        ) +
+        "%"
     )
 }
 
@@ -688,6 +895,12 @@ Write-Host "======================================"
 Write-Host "RAW FRESHNESS"
 Write-Host "======================================"
 
+Write-Host (
+    "Threshold:     " +
+    $freshnessThresholdHours +
+    " hours"
+)
+
 if ($b3Object) {
     Write-Host (
         "B3 RAW:       " +
@@ -711,6 +924,10 @@ if ($b3Object) {
 }
 else {
     Write-Host "B3 RAW:       NOT FOUND"
+
+    $criticalReasons += (
+        "B3 RAW object not found."
+    )
 }
 
 Write-Host
@@ -739,29 +956,90 @@ if ($cvmObject) {
 }
 else {
     Write-Host "CVM RAW:      NOT FOUND"
+
+    $criticalReasons += (
+        "CVM RAW object not found."
+    )
 }
 
 
-$healthOk = (
-    $lambdaStatus -eq "SUCCESS" -and
-    $b3Status -eq "SUCCESS" -and
-    $cvmStatus -eq "SUCCESS" -and
-    $b3Action -ne "UNKNOWN" -and
-    $cvmAction -ne "UNKNOWN" -and
-    $throttles -eq 0 -and
-    $b3Object -and
-    $cvmObject
+Write-Host
+Write-Host "======================================"
+Write-Host "THRESHOLD EVALUATION"
+Write-Host "======================================"
+
+Write-Host (
+    "Freshness limit: " +
+    $freshnessThresholdHours +
+    " hours"
 )
+
+Write-Host (
+    "Memory warning:  " +
+    $memoryAttentionPercent +
+    "%"
+)
+
+Write-Host (
+    "Timeout warning: " +
+    $durationAttentionPercent +
+    "%"
+)
+
+
+if ($warningReasons.Count -gt 0) {
+    Write-Host
+    Write-Host "Warnings:"
+
+    foreach ($reason in $warningReasons) {
+        Write-Host (
+            " - " +
+            $reason
+        )
+    }
+}
+
+
+if ($attentionReasons.Count -gt 0) {
+    Write-Host
+    Write-Host "Attention:"
+
+    foreach ($reason in $attentionReasons) {
+        Write-Host (
+            " - " +
+            $reason
+        )
+    }
+}
+
+
+if ($criticalReasons.Count -gt 0) {
+    Write-Host
+    Write-Host "Critical:"
+
+    foreach ($reason in $criticalReasons) {
+        Write-Host (
+            " - " +
+            $reason
+        )
+    }
+}
 
 
 Write-Host
 Write-Host "======================================"
 
-if ($healthOk) {
-    Write-Host "OBSERVABILITY STATUS: OK"
+if ($criticalReasons.Count -gt 0) {
+    Write-Host "OBSERVABILITY STATUS: CRITICAL"
+}
+elseif ($attentionReasons.Count -gt 0) {
+    Write-Host "OBSERVABILITY STATUS: ATTENTION"
+}
+elseif ($warningReasons.Count -gt 0) {
+    Write-Host "OBSERVABILITY STATUS: OK WITH WARNINGS"
 }
 else {
-    Write-Host "OBSERVABILITY STATUS: ATTENTION"
+    Write-Host "OBSERVABILITY STATUS: OK"
 }
 
 Write-Host "======================================"
