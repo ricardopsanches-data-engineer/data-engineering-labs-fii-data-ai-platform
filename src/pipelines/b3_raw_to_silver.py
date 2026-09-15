@@ -10,7 +10,9 @@ from src.ingestion.b3.parser import parse_b3_download
 from src.storage.s3_silver import upload_silver_file
 
 
-SILVER_ROOT = Path("data/silver/b3")
+DEFAULT_SILVER_ROOT = Path(
+    "data/silver/b3"
+)
 
 
 def validate_b3_dataframe(
@@ -71,11 +73,12 @@ def validate_b3_dataframe(
         )
 
 
-def build_silver_output_path(
+def get_trade_date(
     dataframe: pd.DataFrame,
-) -> Path:
+) -> str:
     """
-    Constrói o caminho particionado da camada Silver.
+    Retorna a única trade_date existente no DataFrame
+    no formato YYYY-MM-DD.
     """
 
     trade_date = (
@@ -84,8 +87,39 @@ def build_silver_output_path(
         .iloc[0]
     )
 
+    return (
+        trade_date
+        .date()
+        .isoformat()
+    )
+
+
+def build_silver_output_path(
+    dataframe: pd.DataFrame,
+    silver_root: str | Path = DEFAULT_SILVER_ROOT,
+) -> Path:
+    """
+    Constrói o caminho local particionado da camada Silver.
+
+    Local:
+        data/silver/b3/...
+
+    AWS Lambda:
+        /tmp/silver/b3/...
+    """
+
+    silver_root = Path(
+        silver_root
+    )
+
+    trade_date = (
+        dataframe["trade_date"]
+        .dropna()
+        .iloc[0]
+    )
+
     output_directory = (
-        SILVER_ROOT
+        silver_root
         / f"year={trade_date.year:04d}"
         / f"month={trade_date.month:02d}"
         / f"day={trade_date.day:02d}"
@@ -94,6 +128,29 @@ def build_silver_output_path(
     return (
         output_directory
         / "b3_trades.parquet"
+    )
+
+
+def build_silver_s3_key(
+    trade_date: str,
+) -> str:
+    """
+    Constrói a chave definitiva da Silver no S3.
+
+    A chave é independente do caminho local usado
+    para gerar o Parquet.
+    """
+
+    parsed_trade_date = pd.Timestamp(
+        trade_date
+    )
+
+    return (
+        "silver/b3/"
+        f"year={parsed_trade_date.year:04d}/"
+        f"month={parsed_trade_date.month:02d}/"
+        f"day={parsed_trade_date.day:02d}/"
+        "b3_trades.parquet"
     )
 
 
@@ -118,6 +175,7 @@ def write_silver_parquet(
 
 def transform_b3_raw_to_silver(
     raw_zip_path: str | Path,
+    silver_root: str | Path = DEFAULT_SILVER_ROOT,
     upload_to_s3: bool = False,
     force: bool = False,
 ) -> tuple[Path, dict[str, object]]:
@@ -130,9 +188,18 @@ def transform_b3_raw_to_silver(
             -> validação
             -> Parquet Silver
             -> upload S3 opcional
+
+    O diretório local da Silver pode ser alterado,
+    permitindo execução local ou em AWS Lambda.
     """
 
-    raw_zip_path = Path(raw_zip_path)
+    raw_zip_path = Path(
+        raw_zip_path
+    )
+
+    silver_root = Path(
+        silver_root
+    )
 
     if not raw_zip_path.exists():
         raise FileNotFoundError(
@@ -142,7 +209,12 @@ def transform_b3_raw_to_silver(
     print("======================================")
     print("B3 RAW -> SILVER")
     print("======================================")
-    print(f"RAW: {raw_zip_path}")
+    print(
+        f"RAW: {raw_zip_path}"
+    )
+    print(
+        f"Silver root: {silver_root}"
+    )
     print()
 
     dataframe, source_metadata = parse_b3_download(
@@ -162,8 +234,13 @@ def transform_b3_raw_to_silver(
         "Validação do DataFrame: OK"
     )
 
-    output_path = build_silver_output_path(
+    trade_date = get_trade_date(
         dataframe
+    )
+
+    output_path = build_silver_output_path(
+        dataframe=dataframe,
+        silver_root=silver_root,
     )
 
     write_silver_parquet(
@@ -171,18 +248,15 @@ def transform_b3_raw_to_silver(
         output_path=output_path,
     )
 
-    trade_date = (
-        dataframe["trade_date"]
-        .dropna()
-        .iloc[0]
-        .date()
-        .isoformat()
+    s3_key = build_silver_s3_key(
+        trade_date
     )
 
     silver_metadata: dict[str, object] = {
         "source": "b3",
         "raw_file": str(raw_zip_path),
         "silver_file": str(output_path),
+        "s3_key": s3_key,
         "records": len(dataframe),
         "trade_date": trade_date,
         "outer_zip": source_metadata["outer_zip"],
@@ -222,6 +296,7 @@ def transform_b3_raw_to_silver(
         s3_uri = upload_silver_file(
             local_path=output_path,
             bucket_name=bucket_name,
+            s3_key=s3_key,
             records=len(dataframe),
             source="b3",
             raw_file=source_metadata["outer_zip"],
@@ -229,14 +304,19 @@ def transform_b3_raw_to_silver(
             force=force,
         )
 
-        silver_metadata["s3_uri"] = s3_uri
+        silver_metadata["s3_uri"] = (
+            s3_uri
+        )
 
     print()
     print(
         "B3 RAW -> SILVER concluído."
     )
 
-    return output_path, silver_metadata
+    return (
+        output_path,
+        silver_metadata,
+    )
 
 
 def main() -> None:
@@ -251,6 +331,17 @@ def main() -> None:
         "raw_zip_path",
         help=(
             "Caminho para o ZIP RAW diário da B3."
+        ),
+    )
+
+    parser.add_argument(
+        "--silver-root",
+        default=str(
+            DEFAULT_SILVER_ROOT
+        ),
+        help=(
+            "Diretório local usado para gerar "
+            "a camada Silver."
         ),
     )
 
@@ -275,6 +366,7 @@ def main() -> None:
 
     transform_b3_raw_to_silver(
         raw_zip_path=args.raw_zip_path,
+        silver_root=args.silver_root,
         upload_to_s3=args.upload,
         force=args.force,
     )
