@@ -7,6 +7,8 @@ dependencies = [
     "boto3",
     "botocore[crt]",
     "requests",
+    "pandas==3.0.5",
+    "pyarrow==25.0.1",
 ]
 
 [tool.pytest.ini_options]
