@@ -335,7 +335,125 @@ A evidência curada da Fase 0 é mantida em:
 docs/observability/evidence/
 ```
 
-## 11. Limites da Fase 0
+## 11. Observabilidade operacional na AWS — Fase 2
+
+A Fase 2 introduziu observabilidade operacional para os workloads serverless executados na AWS.
+
+### Componentes
+
+A implementação utiliza:
+
+```text
+Amazon CloudWatch Logs
+Amazon CloudWatch Metrics
+CloudWatch Dashboard
+PowerShell operational scripts
+
+Dashboard:
+
+fii-data-ai-platform-dev
+Daily Ingestion Lambda
+
+Função:
+
+fii-data-ai-platform-dev-daily-ingestion
+
+Métricas acompanhadas:
+
+Invocations
+Errors
+Throttles
+Duration
+Error Rate
+
+Também são avaliados operacionalmente:
+
+latest execution status
+B3 status
+CVM status
+B3 action
+CVM action
+RAW freshness
+memory usage
+timeout usage
+
+Scripts principais:
+
+scripts/check_daily_ingestion.ps1
+scripts/check_lambda_metrics.ps1
+scripts/check_ingestion_observability.ps1
+B3 RAW to Silver Lambda
+
+Função:
+
+fii-data-ai-platform-dev-b3-raw-to-silver
+
+Métricas acompanhadas:
+
+Invocations
+Errors
+Throttles
+Duration
+Error Rate
+
+Script dedicado:
+
+scripts/check_b3_silver_observability.ps1
+
+Esse script também avalia:
+
+Lambda state
+configured memory
+timeout
+latest execution duration
+maximum memory used
+memory usage percentage
+timeout usage percentage
+Memory tuning evidence
+
+Configuração inicial:
+
+Memory:        1024 MB
+Max Memory:     844 MB
+Memory Usage:  82.42%
+Duration:      18281.35 ms
+
+Configuração final:
+
+Memory:        1536 MB
+Max Memory:     843 MB
+Memory Usage:  54.88%
+Duration:      12309.26 ms
+Timeout Usage: 10.26%
+Throttles:      0
+
+O ajuste aumentou a margem operacional e reduziu a duração da execução.
+
+Observability status model
+
+A avaliação operacional diferencia:
+
+OK
+OK WITH WARNINGS
+WARNING
+ATTENTION
+CRITICAL
+
+Erros históricos dentro da janela de 24 horas podem permanecer visíveis mesmo quando a última execução está saudável.
+
+A análise da execução mais recente deve, portanto, ser considerada em conjunto com as métricas históricas.
+
+Cost posture
+
+A observabilidade da Fase 2 foi mantida proporcional ao projeto.
+
+Foram utilizados recursos nativos de CloudWatch e logs com retenção limitada.
+
+Alarmes pagos e soluções de observabilidade mais complexas foram deliberadamente adiados até existir necessidade operacional concreta.
+
+```
+
+## 12. Limites da Fase 0
 
 A Fase 0 implementa observabilidade local e executável.
 
@@ -351,7 +469,7 @@ Não fazem parte deste escopo:
 
 Essas capacidades podem ser avaliadas na Fase 1, quando a plataforma for migrada/evoluída para AWS.
 
-## 12. Status
+## 13. Status
 
 ```text
 Pipeline Health v3       VALIDATED

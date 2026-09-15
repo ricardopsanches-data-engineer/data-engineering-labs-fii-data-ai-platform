@@ -830,9 +830,107 @@ Analytics consumption
 
 Itens de Fase 1 não são apresentados como entregues na Fase 0.
 
+## 22. Fase 2 — AWS RAW to Silver lineage
+
+A Fase 2 introduziu o primeiro lineage cloud-native operacional da plataforma.
+
+Fluxo atual:
+
+```text
+External Source
+    |
+    v
+B3 / CVM
+    |
+    v
+Daily Ingestion Lambda
+    |
+    v
+S3 RAW
+    |
+    | B3 ObjectCreated event
+    v
+B3 RAW to Silver Lambda
+    |
+    v
+Validated DataFrame
+    |
+    v
+Parquet
+    |
+    v
+S3 SILVER
+RAW lineage
+
+Estrutura atual:
+
+raw/b3/year=YYYY/month=MM/day=DD/
+raw/cvm/year=YYYY/month=MM/day=DD/
+
+O RAW é tratado como camada histórica preservada.
+
+Controles atuais:
+
+SHA-256 fingerprint
+S3 Versioning
+idempotent upload
+silent overwrite protection
+
+Comportamento:
+
+object absent
+→ upload
+
+same SHA-256
+→ skip
+
+different SHA-256
+→ block unless explicit reprocessing is requested
+B3 RAW to Silver lineage
+
+Entrada:
+
+raw/b3/year=YYYY/month=MM/day=DD/b3_download_YYYYMMDD.zip
+
+Saída:
+
+silver/b3/year=YYYY/month=MM/day=DD/b3_trades.parquet
+
+O pipeline registra metadados de saída como:
+
+source
+raw_file
+trade_date
+record count
+SHA-256
+Current lineage limitation
+
+O lineage atual ainda não persiste diretamente no metadata Silver:
+
+RAW S3 key
+RAW S3 VersionId
+RAW SHA-256
+
+Esses campos devem ser adicionados em uma evolução futura para permitir rastreabilidade exata entre uma versão RAW específica e o artefato Silver correspondente.
+
+Reprocessing principle
+
+Reprocessamento histórico deve ser:
+
+explicit
+auditable
+version-aware
+non-destructive
+
+Uma mudança legítima de runtime, parser ou biblioteca pode produzir um Parquet fisicamente diferente mesmo com dados logicamente equivalentes.
+
+Por isso, diferenças de SHA-256 não devem causar overwrite silencioso.
+
+```
+
 ---
 
-## 22. Status
+## 23. Status
 
 ```text
 Core data pipeline      VALIDATED

@@ -706,7 +706,142 @@ A escolha final deve ser feita na Fase 1 conforme custo, simplicidade e necessid
 
 ---
 
-## 26. Non-goals da Fase 0
+## 26. Implemented architecture — Phase 2
+
+Phase 2 introduced the first cloud-native operational data pipelines of the platform.
+
+The implemented architecture is:
+
+```text
+External Sources
+   |
+   +-------------------+
+   |                   |
+   v                   v
+  B3                  CVM
+   |                   |
+   +---------+---------+
+             |
+             v
+      Daily Ingestion
+          Lambda
+             |
+             v
+         S3 RAW
+             |
+             | B3 ObjectCreated event
+             v
+   B3 RAW to Silver Lambda
+             |
+             v
+       Parquet SILVER
+
+The current AWS implementation includes:
+
+Amazon S3 Data Lake
+AWS Lambda
+Amazon ECR
+Amazon EventBridge Scheduler
+Amazon CloudWatch
+Terraform
+RAW layer
+
+Current RAW prefixes:
+
+raw/b3/year=YYYY/month=MM/day=DD/
+raw/cvm/year=YYYY/month=MM/day=DD/
+
+RAW storage is versioned and protected against silent overwrite.
+
+SHA-256 fingerprints are used to support idempotency and change detection.
+
+SILVER layer
+
+Current B3 Silver prefix:
+
+silver/b3/year=YYYY/month=MM/day=DD/b3_trades.parquet
+
+B3 RAW files are parsed and transformed into validated Parquet datasets.
+
+The RAW to Silver process is event-driven through Amazon S3 notifications.
+
+Serverless execution
+
+Daily ingestion is scheduled using Amazon EventBridge Scheduler.
+
+The daily ingestion Lambda is responsible for B3 and CVM RAW ingestion.
+
+The B3 RAW to Silver Lambda runs from a container image stored in Amazon ECR.
+
+No always-on compute infrastructure is required.
+
+Idempotency and historical protection
+
+The current behavior is:
+
+Object absent
+→ upload
+
+Same SHA-256
+→ skip
+
+Different SHA-256
+→ block unless explicit reprocessing is requested
+
+S3 versioning preserves historical object versions and supports auditability and recovery.
+
+Observability
+
+The operational architecture includes:
+
+CloudWatch Logs
+CloudWatch native Lambda metrics
+CloudWatch dashboard
+operational PowerShell scripts
+
+The dashboard monitors both:
+
+Daily Ingestion Lambda
+B3 RAW to Silver Lambda
+
+Operational checks include:
+
+invocations
+errors
+throttles
+duration
+memory usage
+timeout usage
+RAW freshness
+execution status
+Current Phase 2 boundary
+
+Phase 2 ends with:
+
+Cloud Data Lake
+RAW ingestion
+B3 RAW to Silver processing
+Parquet Silver datasets
+serverless automation
+operational observability
+
+The following capabilities remain outside the Phase 2 implementation:
+
+AWS Glue Data Catalog
+Amazon Athena
+Gold analytical datasets
+Apache Iceberg
+advanced orchestration
+advanced data quality framework
+ML infrastructure
+Generative AI infrastructure
+
+These capabilities belong to Phase 3 and later phases.
+```
+
+---
+
+## 27. Non-goals da Fase 0
 
 Não são objetivos concluídos:
 
@@ -726,7 +861,7 @@ Esses pontos não devem ser apresentados como entregues.
 
 ---
 
-## 27. Arquitetura de consumo futura
+## 28. Arquitetura de consumo futura
 
 Consumidores futuros podem incluir:
 
@@ -744,7 +879,7 @@ Esses consumidores devem usar Gold governada, nunca RAW diretamente.
 
 ---
 
-## 28. Architecture decision summary
+## 29. Architecture decision summary
 
 ```text
 Source preservation       -> RAW
@@ -760,7 +895,7 @@ Cloud scale               -> Phase 1
 
 ---
 
-## 29. Status
+## 30. Status
 
 ```text
 Layered architecture          VALIDATED
