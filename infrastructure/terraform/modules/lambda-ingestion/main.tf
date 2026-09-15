@@ -29,7 +29,7 @@ resource "aws_iam_policy" "lambda_execution" {
 
     Statement = [
       {
-        Sid    = "DataLakeBucketRead"
+        Sid    = "DataLakeBucketLocation"
         Effect = "Allow"
 
         Action = [
@@ -37,6 +37,24 @@ resource "aws_iam_policy" "lambda_execution" {
         ]
 
         Resource = var.data_lake_bucket_arn
+      },
+      {
+        Sid    = "DataLakeRawList"
+        Effect = "Allow"
+
+        Action = [
+          "s3:ListBucket"
+        ]
+
+        Resource = var.data_lake_bucket_arn
+
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              "raw/*"
+            ]
+          }
+        }
       },
       {
         Sid    = "DataLakeObjects"
