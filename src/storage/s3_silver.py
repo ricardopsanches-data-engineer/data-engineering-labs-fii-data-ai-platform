@@ -79,14 +79,14 @@ def build_upload_metadata(
     records: int,
     source: str,
     raw_file: str,
-    trade_date: str,
+    reference_date: str,
 ) -> dict[str, str]:
     return {
         "sha256": sha256,
         "records": str(records),
         "source": source,
         "raw_file": raw_file,
-        "trade_date": trade_date,
+        "reference_date": reference_date,
     }
 
 
@@ -97,7 +97,7 @@ def upload_silver_file(
     records: int | None = None,
     source: str | None = None,
     raw_file: str | None = None,
-    trade_date: str | None = None,
+    reference_date: str | None = None,
     force: bool = False,
 ) -> str:
     local_path = Path(local_path)
@@ -127,9 +127,9 @@ def upload_silver_file(
             "raw_file é obrigatório para upload Silver."
         )
 
-    if trade_date is None:
+    if reference_date is None:
         raise ValueError(
-            "trade_date é obrigatório para upload Silver."
+            "reference_date é obrigatório para upload Silver."
         )
 
     if s3_key is None:
@@ -209,7 +209,7 @@ def upload_silver_file(
         records=records,
         source=source,
         raw_file=raw_file,
-        trade_date=trade_date,
+        reference_date=reference_date,
     )
 
     s3_client = boto3.client("s3")

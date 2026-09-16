@@ -237,22 +237,72 @@ def normalize_fii_master(
     return dataframe
 
 
+def parse_cvm_class_register(
+    zip_path: str | Path,
+) -> pd.DataFrame:
+    """
+    Executa o parsing técnico completo do cadastro
+    de classes da CVM sem aplicar regra de negócio.
+
+    Fluxo:
+        ZIP
+            -> registro_classe.csv
+            -> leitura com encoding resiliente
+            -> normalização técnica
+            -> DataFrame
+    """
+
+    dataframe = read_cvm_class_register(
+        zip_path
+    )
+
+    dataframe = dataframe.copy()
+
+    for column in dataframe.columns:
+        if dataframe[column].dtype == "object":
+            dataframe[column] = (
+                dataframe[column]
+                .astype("string")
+                .str.strip()
+            )
+
+    date_columns = [
+        "Data_Registro",
+        "Data_Constituicao",
+        "Data_Inicio",
+        "Data_Patrimonio_Liquido",
+    ]
+
+    for column in date_columns:
+        if column in dataframe.columns:
+            dataframe[column] = pd.to_datetime(
+                dataframe[column],
+                format="%Y-%m-%d",
+                errors="coerce",
+            )
+
+    if "Patrimonio_Liquido" in dataframe.columns:
+        dataframe["Patrimonio_Liquido"] = pd.to_numeric(
+            dataframe["Patrimonio_Liquido"],
+            errors="coerce",
+        )
+
+    return dataframe
+
+
 def parse_cvm_fii_register(
     zip_path: str | Path,
 ) -> pd.DataFrame:
     """
-    Executa o fluxo completo da CVM.
+    Executa o fluxo de negócio para FIIs.
 
-    ZIP
-        -> registro_classe.csv
-        -> leitura com encoding resiliente
+    A partir do cadastro técnico normalizado:
         -> filtro oficial de FIIs
-        -> seleção de colunas
-        -> normalização
-        -> DataFrame
+        -> seleção de colunas de negócio
+        -> normalização específica
     """
 
-    dataframe = read_cvm_class_register(
+    dataframe = parse_cvm_class_register(
         zip_path
     )
 

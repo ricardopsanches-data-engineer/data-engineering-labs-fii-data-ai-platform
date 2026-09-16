@@ -2,38 +2,31 @@ from __future__ import annotations
 
 import argparse
 import os
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
-from src.ingestion.b3.parser import parse_b3_download
+from src.ingestion.cvm.parser import parse_cvm_class_register
 from src.storage.s3_silver import upload_silver_file
 
 
 DEFAULT_SILVER_ROOT = Path(
-    "data/silver/b3"
+    "data/silver/cvm"
 )
 
 
-def validate_b3_dataframe(
+def validate_cvm_dataframe(
     dataframe: pd.DataFrame,
 ) -> None:
-    """
-    Executa validações mínimas antes da escrita na camada Silver.
-    """
-
     required_columns = [
-        "trade_date",
-        "ticker",
-        "instrument_id",
-        "instrument_id_type",
-        "market",
-        "open_price",
-        "low_price",
-        "high_price",
-        "average_price",
-        "close_price",
-        "trades_quantity",
+        "ID_Registro_Fundo",
+        "ID_Registro_Classe",
+        "CNPJ_Classe",
+        "Codigo_CVM",
+        "Tipo_Classe",
+        "Denominacao_Social",
+        "Situacao",
     ]
 
     missing_columns = [
@@ -50,107 +43,40 @@ def validate_b3_dataframe(
 
     if dataframe.empty:
         raise ValueError(
-            "O DataFrame da B3 está vazio."
+            "O DataFrame da CVM está vazio."
         )
-
-    if dataframe["trade_date"].isna().all():
-        raise ValueError(
-            "Nenhuma data de pregão válida foi encontrada."
-        )
-
-    unique_trade_dates = (
-        dataframe["trade_date"]
-        .dropna()
-        .dt.date
-        .unique()
-    )
-
-    if len(unique_trade_dates) != 1:
-        raise ValueError(
-            "Esperávamos exatamente uma trade_date "
-            "no arquivo diário da B3, mas foram encontradas: "
-            f"{unique_trade_dates.tolist()}"
-        )
-
-
-def get_trade_date(
-    dataframe: pd.DataFrame,
-) -> str:
-    """
-    Retorna a única trade_date existente no DataFrame
-    no formato YYYY-MM-DD.
-    """
-
-    trade_date = (
-        dataframe["trade_date"]
-        .dropna()
-        .iloc[0]
-    )
-
-    return (
-        trade_date
-        .date()
-        .isoformat()
-    )
 
 
 def build_silver_output_path(
-    dataframe: pd.DataFrame,
+    reference_date: date,
     silver_root: str | Path = DEFAULT_SILVER_ROOT,
 ) -> Path:
-    """
-    Constrói o caminho local particionado da camada Silver.
-
-    Local:
-        data/silver/b3/...
-
-    AWS Lambda:
-        /tmp/silver/b3/...
-    """
-
     silver_root = Path(
         silver_root
     )
 
-    trade_date = (
-        dataframe["trade_date"]
-        .dropna()
-        .iloc[0]
-    )
-
     output_directory = (
         silver_root
-        / f"year={trade_date.year:04d}"
-        / f"month={trade_date.month:02d}"
-        / f"day={trade_date.day:02d}"
+        / f"year={reference_date.year:04d}"
+        / f"month={reference_date.month:02d}"
+        / f"day={reference_date.day:02d}"
     )
 
     return (
         output_directory
-        / "b3_trades.parquet"
+        / "cvm_fund_classes.parquet"
     )
 
 
 def build_silver_s3_key(
-    trade_date: str,
+    reference_date: date,
 ) -> str:
-    """
-    Constrói a chave definitiva da Silver no S3.
-
-    A chave é independente do caminho local usado
-    para gerar o Parquet.
-    """
-
-    parsed_trade_date = pd.Timestamp(
-        trade_date
-    )
-
     return (
-        "silver/b3/"
-        f"year={parsed_trade_date.year:04d}/"
-        f"month={parsed_trade_date.month:02d}/"
-        f"day={parsed_trade_date.day:02d}/"
-        "b3_trades.parquet"
+        "silver/cvm/"
+        f"year={reference_date.year:04d}/"
+        f"month={reference_date.month:02d}/"
+        f"day={reference_date.day:02d}/"
+        "cvm_fund_classes.parquet"
     )
 
 
@@ -158,10 +84,6 @@ def write_silver_parquet(
     dataframe: pd.DataFrame,
     output_path: Path,
 ) -> None:
-    """
-    Grava o DataFrame da B3 em formato Parquet.
-    """
-
     output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -173,32 +95,15 @@ def write_silver_parquet(
     )
 
 
-def transform_b3_raw_to_silver(
+def transform_cvm_raw_to_silver(
     raw_zip_path: str | Path,
+    reference_date: date,
     silver_root: str | Path = DEFAULT_SILVER_ROOT,
     upload_to_s3: bool = False,
     force: bool = False,
 ) -> tuple[Path, dict[str, object]]:
-    """
-    Executa a transformação completa RAW -> Silver.
-
-    Fluxo:
-        ZIP RAW B3
-            -> parser
-            -> validação
-            -> Parquet Silver
-            -> upload S3 opcional
-
-    O diretório local da Silver pode ser alterado,
-    permitindo execução local ou em AWS Lambda.
-    """
-
     raw_zip_path = Path(
         raw_zip_path
-    )
-
-    silver_root = Path(
-        silver_root
     )
 
     if not raw_zip_path.exists():
@@ -207,17 +112,14 @@ def transform_b3_raw_to_silver(
         )
 
     print("======================================")
-    print("B3 RAW -> SILVER")
+    print("CVM RAW -> SILVER")
     print("======================================")
-    print(
-        f"RAW: {raw_zip_path}"
-    )
-    print(
-        f"Silver root: {silver_root}"
-    )
+    print(f"RAW: {raw_zip_path}")
+    print(f"Reference date: {reference_date}")
+    print(f"Silver root: {silver_root}")
     print()
 
-    dataframe, source_metadata = parse_b3_download(
+    dataframe = parse_cvm_class_register(
         raw_zip_path
     )
 
@@ -226,7 +128,7 @@ def transform_b3_raw_to_silver(
         f"{len(dataframe):,}"
     )
 
-    validate_b3_dataframe(
+    validate_cvm_dataframe(
         dataframe
     )
 
@@ -234,12 +136,8 @@ def transform_b3_raw_to_silver(
         "Validação do DataFrame: OK"
     )
 
-    trade_date = get_trade_date(
-        dataframe
-    )
-
     output_path = build_silver_output_path(
-        dataframe=dataframe,
+        reference_date=reference_date,
         silver_root=silver_root,
     )
 
@@ -249,19 +147,16 @@ def transform_b3_raw_to_silver(
     )
 
     s3_key = build_silver_s3_key(
-        trade_date
+        reference_date
     )
 
     silver_metadata: dict[str, object] = {
-        "source": "b3",
+        "source": "cvm",
         "raw_file": str(raw_zip_path),
         "silver_file": str(output_path),
         "s3_key": s3_key,
         "records": len(dataframe),
-        "trade_date": trade_date,
-        "outer_zip": source_metadata["outer_zip"],
-        "inner_zip": source_metadata["inner_zip"],
-        "xml_file": source_metadata["xml_file"],
+        "reference_date": reference_date.isoformat(),
     }
 
     print()
@@ -298,9 +193,9 @@ def transform_b3_raw_to_silver(
             bucket_name=bucket_name,
             s3_key=s3_key,
             records=len(dataframe),
-            source="b3",
-            raw_file=source_metadata["outer_zip"],
-            reference_date=trade_date,
+            source="cvm",
+            raw_file=raw_zip_path.name,
+            reference_date=reference_date.isoformat(),
             force=force,
         )
 
@@ -310,7 +205,7 @@ def transform_b3_raw_to_silver(
 
     print()
     print(
-        "B3 RAW -> SILVER concluído."
+        "CVM RAW -> SILVER concluído."
     )
 
     return (
@@ -322,16 +217,20 @@ def transform_b3_raw_to_silver(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Transforma o RAW diário da B3 "
+            "Transforma o RAW cadastral da CVM "
             "em Parquet na camada Silver."
         )
     )
 
     parser.add_argument(
         "raw_zip_path",
-        help=(
-            "Caminho para o ZIP RAW diário da B3."
-        ),
+        help="Caminho para o ZIP RAW da CVM.",
+    )
+
+    parser.add_argument(
+        "--reference-date",
+        required=True,
+        help="Data de referência no formato YYYY-MM-DD.",
     )
 
     parser.add_argument(
@@ -339,33 +238,25 @@ def main() -> None:
         default=str(
             DEFAULT_SILVER_ROOT
         ),
-        help=(
-            "Diretório local usado para gerar "
-            "a camada Silver."
-        ),
     )
 
     parser.add_argument(
         "--upload",
         action="store_true",
-        help=(
-            "Realiza upload do Parquet Silver para o S3."
-        ),
     )
 
     parser.add_argument(
         "--force",
         action="store_true",
-        help=(
-            "Permite criar nova versão no S3 "
-            "quando já existe objeto diferente."
-        ),
     )
 
     args = parser.parse_args()
 
-    transform_b3_raw_to_silver(
+    transform_cvm_raw_to_silver(
         raw_zip_path=args.raw_zip_path,
+        reference_date=date.fromisoformat(
+            args.reference_date
+        ),
         silver_root=args.silver_root,
         upload_to_s3=args.upload,
         force=args.force,
