@@ -149,3 +149,51 @@ module "lambda_b3_silver" {
     module.ecr_b3_silver
   ]
 }
+
+module "glue_catalog" {
+  source = "../../modules/glue-catalog"
+
+  database_name = "fii_data_ai_platform_dev"
+
+  data_lake_bucket_name = module.s3_data_lake.bucket_name
+
+  b3_table_name = "b3_trades"
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "AnalyticsCatalog"
+    ManagedBy   = "Terraform"
+  }
+
+  depends_on = [
+    module.iam
+  ]
+}
+
+module "athena" {
+  source = "../../modules/athena"
+
+  workgroup_name = "fii-data-ai-platform-dev"
+
+  database_name = module.glue_catalog.database_name
+
+  data_lake_bucket_name = module.s3_data_lake.bucket_name
+  data_lake_bucket_arn  = module.s3_data_lake.bucket_arn
+
+  query_results_prefix = "athena-results"
+
+  bytes_scanned_cutoff_per_query = 1073741824
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "Analytics"
+    ManagedBy   = "Terraform"
+  }
+
+  depends_on = [
+    module.glue_catalog,
+    module.iam
+  ]
+}

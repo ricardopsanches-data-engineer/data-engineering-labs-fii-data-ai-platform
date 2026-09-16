@@ -344,6 +344,25 @@ resource "aws_iam_policy" "phase1_admin" {
         Resource = "*"
       },
       {
+        Sid    = "GlueDataCatalogRead"
+        Effect = "Allow"
+
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:GetPartition",
+          "glue:GetPartitions"
+        ]
+
+        Resource = [
+          "arn:aws:glue:sa-east-1:625685670804:catalog",
+          "arn:aws:glue:sa-east-1:625685670804:database/*",
+          "arn:aws:glue:sa-east-1:625685670804:table/*/*"
+        ]
+      },
+      {
         Sid    = "CloudWatchDashboardManagement"
         Effect = "Allow"
 
