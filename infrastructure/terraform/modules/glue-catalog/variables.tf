@@ -14,6 +14,12 @@ variable "b3_table_name" {
   default     = "b3_trades"
 }
 
+variable "cvm_table_name" {
+  description = "Name of the Glue Catalog table for CVM fund classes Silver data."
+  type        = string
+  default     = "cvm_fund_classes"
+}
+
 variable "tags" {
   description = "Tags applied to Glue resources where supported."
   type        = map(string)

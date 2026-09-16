@@ -201,7 +201,8 @@ module "glue_catalog" {
 
   data_lake_bucket_name = module.s3_data_lake.bucket_name
 
-  b3_table_name = "b3_trades"
+  b3_table_name  = "b3_trades"
+  cvm_table_name = "cvm_fund_classes"
 
   tags = {
     Project     = "fii-data-ai-platform"
