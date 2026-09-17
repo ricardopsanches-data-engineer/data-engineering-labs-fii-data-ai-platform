@@ -31,3 +31,9 @@ variable "fii_master_table_name" {
   type        = string
   default     = "fii_master"
 }
+
+variable "b3_instruments_table_name" {
+  description = "AWS Glue table name for the B3 Instruments Silver dataset."
+  type        = string
+  default     = "b3_instruments"
+}
