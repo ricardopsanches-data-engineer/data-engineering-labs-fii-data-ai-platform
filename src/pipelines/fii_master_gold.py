@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from time import perf_counter
 
 import pandas as pd
 
 from src.gold.fii_master import (
     build_fii_master,
 )
+from src.observability.gold_quality import (
+    DEFAULT_MIN_RESOLUTION_RATE,
+    assert_fii_master_quality,
+    emit_observability_event,
+    evaluate_fii_master_quality,
+)
 
+
+PIPELINE_NAME = "fii_master_gold"
 
 DEFAULT_OUTPUT_ROOT = Path(
     "data/gold/fii-master"
@@ -62,6 +71,20 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument(
+        "--min-resolution-rate",
+        type=float,
+        default=(
+            DEFAULT_MIN_RESOLUTION_RATE
+        ),
+        help=(
+            "Minimum expected entity "
+            "resolution rate. "
+            "Below this value the pipeline "
+            "emits WARN instead of FAIL."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -73,6 +96,16 @@ def validate_input_file(
         raise FileNotFoundError(
             f"{label} file not found: "
             f"{path}"
+        )
+
+
+def validate_resolution_threshold(
+    value: float,
+) -> None:
+    if not 0 <= value <= 1:
+        raise ValueError(
+            "--min-resolution-rate "
+            "must be between 0 and 1."
         )
 
 
@@ -95,6 +128,7 @@ def build_output_path(
 
 def print_summary(
     fii_master: pd.DataFrame,
+    quality_result: dict,
 ) -> None:
     print()
     print(
@@ -108,9 +142,33 @@ def print_summary(
     )
     print()
 
+    metrics = quality_result[
+        "metrics"
+    ]
+
     print(
         "Registros: "
-        f"{len(fii_master):,}"
+        f"{metrics['gold_fii_master_rows']:,}"
+    )
+
+    print(
+        "Resolvidos: "
+        f"{metrics['gold_fii_master_resolved']:,}"
+    )
+
+    print(
+        "Não resolvidos: "
+        f"{metrics['gold_fii_master_unresolved']:,}"
+    )
+
+    print(
+        "Taxa de resolução: "
+        f"{metrics['gold_fii_master_resolution_rate'] * 100:.2f}%"
+    )
+
+    print(
+        "Status de qualidade: "
+        f"{quality_result['status']}"
     )
 
     if fii_master.empty:
@@ -161,31 +219,19 @@ def print_summary(
         .to_string()
     )
 
-    resolved = (
-        fii_master[
-            "resolution_status"
-        ]
-        .eq(
-            "AUTO_RESOLVED"
-        )
-        .sum()
-    )
-
-    total = len(
-        fii_master
-    )
-
-    resolution_rate = (
-        resolved
-        / total
-        * 100
-    )
-
     print()
     print(
-        "Taxa de resolução: "
-        f"{resolution_rate:.2f}%"
+        "=== QUALITY CHECKS ==="
     )
+
+    for check in quality_result[
+        "checks"
+    ]:
+        print(
+            f"{check['status']:4} "
+            f"{check['name']}: "
+            f"{check['message']}"
+        )
 
     print()
     print(
@@ -213,8 +259,39 @@ def print_summary(
     )
 
 
-def main() -> None:
-    args = parse_args()
+def run_pipeline(
+    args: argparse.Namespace,
+) -> Path:
+    started_at = perf_counter()
+
+    emit_observability_event(
+        "pipeline_started",
+        pipeline=PIPELINE_NAME,
+        cvm_path=str(
+            args.cvm
+        ),
+        instruments_path=str(
+            args.instruments
+        ),
+        trades_path=(
+            str(
+                args.trades
+            )
+            if args.trades
+            is not None
+            else None
+        ),
+        output_root=str(
+            args.output_root
+        ),
+        min_resolution_rate=(
+            args.min_resolution_rate
+        ),
+    )
+
+    validate_resolution_threshold(
+        args.min_resolution_rate
+    )
 
     validate_input_file(
         args.cvm,
@@ -269,18 +346,56 @@ def main() -> None:
         trades=trades,
     )
 
-    if fii_master.empty:
-        raise RuntimeError(
-            "fii_master generation "
-            "returned zero records."
+    quality_result = (
+        evaluate_fii_master_quality(
+            fii_master,
+            min_resolution_rate=(
+                args.min_resolution_rate
+            ),
         )
+    )
 
-    reference_date = (
+    emit_observability_event(
+        "gold_fii_master_quality",
+        pipeline=PIPELINE_NAME,
+        status=quality_result[
+            "status"
+        ],
+        metrics=quality_result[
+            "metrics"
+        ],
+        checks=quality_result[
+            "checks"
+        ],
+        thresholds=quality_result[
+            "thresholds"
+        ],
+    )
+
+    print_summary(
+        fii_master,
+        quality_result,
+    )
+
+    assert_fii_master_quality(
+        quality_result
+    )
+
+    reference_dates = (
         fii_master[
             "reference_date"
         ]
         .dropna()
-        .iloc[0]
+    )
+
+    if reference_dates.empty:
+        raise RuntimeError(
+            "Gold FII master has no "
+            "reference_date."
+        )
+
+    reference_date = (
+        reference_dates.iloc[0]
     )
 
     output_path = (
@@ -300,8 +415,34 @@ def main() -> None:
         index=False,
     )
 
-    print_summary(
-        fii_master
+    elapsed_seconds = (
+        perf_counter()
+        - started_at
+    )
+
+    emit_observability_event(
+        "pipeline_completed",
+        pipeline=PIPELINE_NAME,
+        status=quality_result[
+            "status"
+        ],
+        output_path=str(
+            output_path
+        ),
+        reference_date=str(
+            pd.Timestamp(
+                reference_date
+            ).date()
+        ),
+        rows=int(
+            len(
+                fii_master
+            )
+        ),
+        elapsed_seconds=round(
+            elapsed_seconds,
+            4,
+        ),
     )
 
     print()
@@ -311,6 +452,45 @@ def main() -> None:
     print(
         f"  {output_path}"
     )
+
+    return output_path
+
+
+def main() -> None:
+    args = parse_args()
+
+    started_at = perf_counter()
+
+    try:
+        run_pipeline(
+            args
+        )
+
+    except Exception as exc:
+        elapsed_seconds = (
+            perf_counter()
+            - started_at
+        )
+
+        emit_observability_event(
+            "pipeline_failed",
+            pipeline=PIPELINE_NAME,
+            status="FAIL",
+            error_type=(
+                type(
+                    exc
+                ).__name__
+            ),
+            error_message=str(
+                exc
+            ),
+            elapsed_seconds=round(
+                elapsed_seconds,
+                4,
+            ),
+        )
+
+        raise
 
 
 if __name__ == "__main__":
