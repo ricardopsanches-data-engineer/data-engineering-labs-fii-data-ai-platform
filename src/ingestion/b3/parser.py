@@ -505,12 +505,39 @@ def _extract_underlying_fields(
 
 
 def _parse_instrument_record(
-    instrm_inf: ET.Element,
+    instrm: ET.Element,
 ) -> dict[str, object] | None:
     """
-    Converte um InstrmInf do BVBG.028.02
+    Converte um Instrm completo do BVBG.028.02
     em registro tabular.
+
+    O nível Instrm é necessário porque os dados
+    cadastrais estão distribuídos entre: RptParams,
+    FinInstrmId, FinInstrmAttrCmon e InstrmInf.
     """
+
+    rpt_params = _find_direct_child(
+        instrm,
+        "RptParams",
+    )
+
+    fin_instrm_id = _find_direct_child(
+        instrm,
+        "FinInstrmId",
+    )
+
+    fin_instrm_attr_cmon = _find_direct_child(
+        instrm,
+        "FinInstrmAttrCmon",
+    )
+
+    instrm_inf = _find_direct_child(
+        instrm,
+        "InstrmInf",
+    )
+
+    if instrm_inf is None:
+        return None
 
     children = list(
         instrm_inf
@@ -534,6 +561,86 @@ def _parse_instrument_record(
     )
 
     return {
+        "report_date": (
+            _find_descendant_text(
+                rpt_params,
+                "Dt",
+            )
+            if rpt_params is not None
+            else None
+        ),
+        "update_type": (
+            _find_descendant_text(
+                rpt_params,
+                "UpdTp",
+            )
+            if rpt_params is not None
+            else None
+        ),
+        "instrument_id": (
+            _find_descendant_text(
+                fin_instrm_id,
+                "Id",
+            )
+            if fin_instrm_id is not None
+            else None
+        ),
+        "instrument_id_type": (
+            _find_descendant_text(
+                fin_instrm_id,
+                "Prtry",
+            )
+            if fin_instrm_id is not None
+            else None
+        ),
+        "listing_market": (
+            _find_descendant_text(
+                fin_instrm_id,
+                "MktIdrCd",
+            )
+            if fin_instrm_id is not None
+            else None
+        ),
+        "asset": (
+            _find_descendant_text(
+                fin_instrm_attr_cmon,
+                "Asst",
+            )
+            if fin_instrm_attr_cmon is not None
+            else None
+        ),
+        "asset_description": (
+            _find_descendant_text(
+                fin_instrm_attr_cmon,
+                "AsstDesc",
+            )
+            if fin_instrm_attr_cmon is not None
+            else None
+        ),
+        "b3_market": (
+            _find_descendant_text(
+                fin_instrm_attr_cmon,
+                "Mkt",
+            )
+            if fin_instrm_attr_cmon is not None
+            else None
+        ),
+        "b3_segment": (
+            _find_descendant_text(
+                fin_instrm_attr_cmon,
+                "Sgmt",
+            )
+            if fin_instrm_attr_cmon is not None
+            else None
+        ),
+        "instrument_description": (
+            _find_descendant_text(
+                fin_instrm_attr_cmon,
+                "Desc",
+            )
+            if fin_instrm_attr_cmon is not None
+            else None
+        ),
         "instrument_type": instrument_type,
         "security_category": (
             _find_descendant_text(
@@ -672,13 +779,17 @@ def _parse_instrument_record(
         ),
     }
 
-
 def parse_b3_instrument_report_xml(
     xml_bytes: bytes,
 ) -> pd.DataFrame:
     """
     Faz o parse incremental de um
     XML BVBG.028.02.
+
+    O processamento ocorre no fechamento de cada
+    elemento Instrm para preservar, no mesmo registro,
+    os campos de RptParams, FinInstrmId,
+    FinInstrmAttrCmon e InstrmInf.
     """
 
     records: list[
@@ -695,7 +806,7 @@ def parse_b3_instrument_report_xml(
     ):
         if _local_name(
             element.tag
-        ) != "InstrmInf":
+        ) != "Instrm":
             continue
 
         record = (
@@ -714,7 +825,6 @@ def parse_b3_instrument_report_xml(
     return pd.DataFrame(
         records
     )
-
 
 def normalize_types(
     dataframe: pd.DataFrame,
@@ -771,6 +881,15 @@ def normalize_instrument_types(
     dataframe = dataframe.copy()
 
     string_columns = [
+        "update_type",
+        "instrument_id",
+        "instrument_id_type",
+        "listing_market",
+        "asset",
+        "asset_description",
+        "b3_market",
+        "b3_segment",
+        "instrument_description",
         "instrument_type",
         "security_category",
         "ticker",
@@ -799,6 +918,7 @@ def normalize_instrument_types(
         )
 
     date_columns = [
+        "report_date",
         "trading_start_date",
         "trading_end_date",
         "corporate_action_start_date",
@@ -837,7 +957,6 @@ def normalize_instrument_types(
         )
 
     return dataframe
-
 
 def parse_b3_download(
     outer_zip_path: str | Path,
@@ -1135,6 +1254,11 @@ def show_instrument_discovery(
         return
 
     columns = [
+        "report_date",
+        "instrument_id",
+        "instrument_id_type",
+        "listing_market",
+        "asset",
         "instrument_type",
         "security_category",
         "ticker",
@@ -1221,7 +1345,7 @@ def main() -> None:
         )
 
         for xml_file in metadata[
-            "xml_files"
+            "available_xml_files"
         ]:
             print(
                 f"    - {xml_file}"
