@@ -19,6 +19,39 @@ variable "force_destroy" {
   default     = false
 }
 
+variable "raw_retention_days" {
+  description = "Number of days to retain current RAW objects before expiration."
+  type        = number
+  default     = 90
+
+  validation {
+    condition     = var.raw_retention_days >= 1
+    error_message = "raw_retention_days must be at least 1."
+  }
+}
+
+variable "raw_noncurrent_retention_days" {
+  description = "Number of days to retain noncurrent versions of RAW objects."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.raw_noncurrent_retention_days >= 1
+    error_message = "raw_noncurrent_retention_days must be at least 1."
+  }
+}
+
+variable "incomplete_multipart_retention_days" {
+  description = "Number of days before incomplete multipart uploads are aborted."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.incomplete_multipart_retention_days >= 1
+    error_message = "incomplete_multipart_retention_days must be at least 1."
+  }
+}
+
 variable "tags" {
   description = "Additional tags applied to S3 resources."
   type        = map(string)

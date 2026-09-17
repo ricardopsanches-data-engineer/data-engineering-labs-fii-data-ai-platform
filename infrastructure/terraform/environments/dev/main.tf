@@ -32,6 +32,10 @@ module "s3_data_lake" {
 
   force_destroy = false
 
+  raw_retention_days                  = 30
+  raw_noncurrent_retention_days       = 7
+  incomplete_multipart_retention_days = 7
+
   tags = {
     Owner = "DataEngineering"
     Layer = "DataLake"

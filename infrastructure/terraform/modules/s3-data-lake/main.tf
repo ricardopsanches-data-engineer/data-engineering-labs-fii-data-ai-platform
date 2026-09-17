@@ -39,3 +39,74 @@ resource "aws_s3_bucket_public_access_block" "data_lake" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
+
+resource "aws_s3_bucket_lifecycle_configuration" "data_lake" {
+  bucket = aws_s3_bucket.data_lake.id
+
+  depends_on = [
+    aws_s3_bucket_versioning.data_lake
+  ]
+
+  rule {
+    id     = "expire-raw-b3"
+    status = "Enabled"
+
+    filter {
+      prefix = "raw/b3/"
+    }
+
+    expiration {
+      days = var.raw_retention_days
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.raw_noncurrent_retention_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = var.incomplete_multipart_retention_days
+    }
+  }
+
+  rule {
+    id     = "expire-raw-cvm"
+    status = "Enabled"
+
+    filter {
+      prefix = "raw/cvm/"
+    }
+
+    expiration {
+      days = var.raw_retention_days
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.raw_noncurrent_retention_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = var.incomplete_multipart_retention_days
+    }
+  }
+
+  rule {
+    id     = "expire-raw-b3-instruments"
+    status = "Enabled"
+
+    filter {
+      prefix = "raw/b3-instruments/"
+    }
+
+    expiration {
+      days = var.raw_retention_days
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.raw_noncurrent_retention_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = var.incomplete_multipart_retention_days
+    }
+  }
+}
