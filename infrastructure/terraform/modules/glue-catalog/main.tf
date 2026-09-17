@@ -158,152 +158,152 @@ resource "aws_glue_catalog_table" "cvm_fund_classes" {
     }
 
     columns {
-      name = "ID_Registro_Fundo"
+      name = "id_registro_fundo"
       type = "string"
     }
 
     columns {
-      name = "ID_Registro_Classe"
+      name = "id_registro_classe"
       type = "string"
     }
 
     columns {
-      name = "CNPJ_Classe"
+      name = "cnpj_classe"
       type = "string"
     }
 
     columns {
-      name = "Codigo_CVM"
+      name = "codigo_cvm"
       type = "string"
     }
 
     columns {
-      name = "Data_Registro"
+      name = "data_registro"
       type = "timestamp"
     }
 
     columns {
-      name = "Data_Constituicao"
+      name = "data_constituicao"
       type = "timestamp"
     }
 
     columns {
-      name = "Data_Inicio"
+      name = "data_inicio"
       type = "timestamp"
     }
 
     columns {
-      name = "Tipo_Classe"
+      name = "tipo_classe"
       type = "string"
     }
 
     columns {
-      name = "Denominacao_Social"
+      name = "denominacao_social"
       type = "string"
     }
 
     columns {
-      name = "Situacao"
+      name = "situacao"
       type = "string"
     }
 
     columns {
-      name = "Data_Inicio_Situacao"
+      name = "data_inicio_situacao"
       type = "string"
     }
 
     columns {
-      name = "Classificacao"
+      name = "classificacao"
       type = "string"
     }
 
     columns {
-      name = "Indicador_Desempenho"
+      name = "indicador_desempenho"
       type = "string"
     }
 
     columns {
-      name = "Classe_Cotas"
+      name = "classe_cotas"
       type = "string"
     }
 
     columns {
-      name = "Classificacao_Anbima"
+      name = "classificacao_anbima"
       type = "string"
     }
 
     columns {
-      name = "Tributacao_Longo_Prazo"
+      name = "tributacao_longo_prazo"
       type = "string"
     }
 
     columns {
-      name = "Entidade_Investimento"
+      name = "entidade_investimento"
       type = "string"
     }
 
     columns {
-      name = "Permitido_Aplicacao_CemPorCento_Exterior"
+      name = "permitido_aplicacao_cemporcento_exterior"
       type = "string"
     }
 
     columns {
-      name = "Classe_ESG"
+      name = "classe_esg"
       type = "string"
     }
 
     columns {
-      name = "Forma_Condominio"
+      name = "forma_condominio"
       type = "string"
     }
 
     columns {
-      name = "Exclusivo"
+      name = "exclusivo"
       type = "string"
     }
 
     columns {
-      name = "Publico_Alvo"
+      name = "publico_alvo"
       type = "string"
     }
 
     columns {
-      name = "Patrimonio_Liquido"
+      name = "patrimonio_liquido"
       type = "double"
     }
 
     columns {
-      name = "Data_Patrimonio_Liquido"
+      name = "data_patrimonio_liquido"
       type = "timestamp"
     }
 
     columns {
-      name = "CNPJ_Auditor"
+      name = "cnpj_auditor"
       type = "string"
     }
 
     columns {
-      name = "Auditor"
+      name = "auditor"
       type = "string"
     }
 
     columns {
-      name = "CNPJ_Custodiante"
+      name = "cnpj_custodiante"
       type = "string"
     }
 
     columns {
-      name = "Custodiante"
+      name = "custodiante"
       type = "string"
     }
 
     columns {
-      name = "CNPJ_Controlador"
+      name = "cnpj_controlador"
       type = "string"
     }
 
     columns {
-      name = "Controlador"
+      name = "controlador"
       type = "string"
     }
   }

@@ -240,9 +240,4 @@ module "athena" {
     Component   = "Analytics"
     ManagedBy   = "Terraform"
   }
-
-  depends_on = [
-    module.glue_catalog,
-    module.iam
-  ]
 }
