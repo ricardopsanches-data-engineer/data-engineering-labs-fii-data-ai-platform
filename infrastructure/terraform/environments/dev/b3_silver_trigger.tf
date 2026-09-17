@@ -11,4 +11,12 @@ module "s3_b3_silver_trigger" {
 
   cvm_lambda_function_name = module.lambda_cvm_silver.function_name
   cvm_lambda_function_arn  = module.lambda_cvm_silver.function_arn
+
+  b3_instruments_lambda_function_name = (
+    module.lambda_b3_instruments_silver.function_name
+  )
+
+  b3_instruments_lambda_function_arn = (
+    module.lambda_b3_instruments_silver.function_arn
+  )
 }

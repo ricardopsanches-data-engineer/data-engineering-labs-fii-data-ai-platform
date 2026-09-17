@@ -32,3 +32,13 @@ variable "cvm_lambda_function_arn" {
   description = "ARN of the CVM RAW to Silver Lambda."
   type        = string
 }
+
+variable "b3_instruments_lambda_function_name" {
+  description = "Name of the B3 Instruments RAW to Silver Lambda."
+  type        = string
+}
+
+variable "b3_instruments_lambda_function_arn" {
+  description = "ARN of the B3 Instruments RAW to Silver Lambda."
+  type        = string
+}

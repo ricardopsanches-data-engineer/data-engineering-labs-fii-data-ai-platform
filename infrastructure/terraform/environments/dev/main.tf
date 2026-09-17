@@ -198,6 +198,35 @@ module "lambda_cvm_silver" {
   ]
 }
 
+module "lambda_b3_instruments_silver" {
+  source = "../../modules/lambda-b3-instruments-silver"
+
+  function_name = "fii-data-ai-platform-dev-b3-instruments-raw-to-silver"
+
+  image_uri = (
+    "${module.ecr_b3_instruments_silver.repository_url}:v0.1.1"
+  )
+
+  data_lake_bucket_name = module.s3_data_lake.bucket_name
+  data_lake_bucket_arn  = module.s3_data_lake.bucket_arn
+
+  timeout     = 300
+  memory_size = 3008
+
+  log_retention_days = 14
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "B3InstrumentsSilver"
+    ManagedBy   = "Terraform"
+  }
+
+  depends_on = [
+    module.ecr_b3_instruments_silver
+  ]
+}
+
 module "glue_catalog" {
   source = "../../modules/glue-catalog"
 
@@ -240,6 +269,21 @@ module "athena" {
     Project     = "fii-data-ai-platform"
     Environment = "dev"
     Component   = "Analytics"
+    ManagedBy   = "Terraform"
+  }
+}
+
+module "ecr_b3_instruments_silver" {
+  source = "../../modules/ecr"
+
+  repository_name = "fii-data-ai-platform-dev-b3-instruments-silver"
+
+  lambda_source_arn = "arn:aws:lambda:sa-east-1:625685670804:function:fii-data-ai-platform-dev-b3-instruments-raw-to-silver"
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "B3InstrumentsSilver"
     ManagedBy   = "Terraform"
   }
 }
