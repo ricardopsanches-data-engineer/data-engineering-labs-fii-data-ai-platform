@@ -323,3 +323,141 @@ resource "aws_glue_catalog_table" "cvm_fund_classes" {
     type = "int"
   }
 }
+
+resource "aws_glue_catalog_table" "fii_master" {
+  name          = var.fii_master_table_name
+  database_name = aws_glue_catalog_database.analytics.name
+
+  description = "Gold FII master dataset containing resolved CVM and B3 entity relationships."
+
+  table_type = "EXTERNAL_TABLE"
+
+  parameters = {
+    EXTERNAL                    = "TRUE"
+    classification              = "parquet"
+    "projection.enabled"        = "true"
+    "projection.year.type"      = "integer"
+    "projection.year.range"     = "2026,2035"
+    "projection.year.digits"    = "4"
+    "projection.month.type"     = "integer"
+    "projection.month.range"    = "1,12"
+    "projection.month.digits"   = "2"
+    "projection.day.type"       = "integer"
+    "projection.day.range"      = "1,31"
+    "projection.day.digits"     = "2"
+    "storage.location.template" = "s3://${var.data_lake_bucket_name}/gold/fii-master/year=$${year}/month=$${month}/day=$${day}/"
+  }
+
+  storage_descriptor {
+    location = "s3://${var.data_lake_bucket_name}/gold/fii-master/"
+
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    compressed = false
+
+    ser_de_info {
+      name                  = "ParquetHiveSerDe"
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+
+      parameters = {
+        "serialization.format" = "1"
+      }
+    }
+
+    columns {
+      name = "cnpj_classe"
+      type = "string"
+    }
+
+    columns {
+      name = "codigo_cvm"
+      type = "string"
+    }
+
+    columns {
+      name = "denominacao_social"
+      type = "string"
+    }
+
+    columns {
+      name = "situacao_cvm"
+      type = "string"
+    }
+
+    columns {
+      name = "core_name"
+      type = "string"
+    }
+
+    columns {
+      name = "primary_instrument_id"
+      type = "string"
+    }
+
+    columns {
+      name = "ticker"
+      type = "string"
+    }
+
+    columns {
+      name = "isin"
+      type = "string"
+    }
+
+    columns {
+      name = "instrument_id_type"
+      type = "string"
+    }
+
+    columns {
+      name = "listing_market"
+      type = "string"
+    }
+
+    columns {
+      name = "asset"
+      type = "string"
+    }
+
+    columns {
+      name = "corporate_name"
+      type = "string"
+    }
+
+    columns {
+      name = "resolution_method"
+      type = "string"
+    }
+
+    columns {
+      name = "resolution_status"
+      type = "string"
+    }
+
+    columns {
+      name = "resolution_evidence"
+      type = "string"
+    }
+
+    columns {
+      name = "reference_date"
+      type = "timestamp"
+    }
+  }
+
+  partition_keys {
+    name = "year"
+    type = "int"
+  }
+
+  partition_keys {
+    name = "month"
+    type = "int"
+  }
+
+  partition_keys {
+    name = "day"
+    type = "int"
+  }
+}

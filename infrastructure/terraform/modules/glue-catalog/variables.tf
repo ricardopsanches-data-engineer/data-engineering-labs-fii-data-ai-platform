@@ -25,3 +25,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "fii_master_table_name" {
+  description = "AWS Glue table name for the Gold FII master dataset."
+  type        = string
+  default     = "fii_master"
+}
