@@ -287,3 +287,47 @@ module "ecr_b3_instruments_silver" {
     ManagedBy   = "Terraform"
   }
 }
+
+module "ecr_fii_master_gold" {
+  source = "../../modules/ecr"
+
+  repository_name = "fii-data-ai-platform-dev-fii-master-gold"
+
+  lambda_source_arn = "arn:aws:lambda:sa-east-1:625685670804:function:fii-data-ai-platform-dev-fii-master-gold"
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "FiiMasterGold"
+    ManagedBy   = "Terraform"
+  }
+}
+
+module "lambda_fii_master_gold" {
+  source = "../../modules/lambda-fii-master-gold"
+
+  function_name = "fii-data-ai-platform-dev-fii-master-gold"
+
+  image_uri = (
+    "${module.ecr_fii_master_gold.repository_url}:v0.1.1"
+  )
+
+  data_lake_bucket_name = module.s3_data_lake.bucket_name
+  data_lake_bucket_arn  = module.s3_data_lake.bucket_arn
+
+  timeout     = 300
+  memory_size = 2048
+
+  log_retention_days = 14
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "FiiMasterGold"
+    ManagedBy   = "Terraform"
+  }
+
+  depends_on = [
+    module.ecr_fii_master_gold
+  ]
+}
