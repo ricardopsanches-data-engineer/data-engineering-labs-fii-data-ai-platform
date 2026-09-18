@@ -146,7 +146,7 @@ module "lambda_b3_silver" {
   function_name = "fii-data-ai-platform-dev-b3-raw-to-silver"
 
   image_uri = (
-    "${module.ecr_b3_silver.repository_url}:v0.1.3"
+    "${module.ecr_b3_silver.repository_url}:v0.1.4"
   )
 
   data_lake_bucket_name = module.s3_data_lake.bucket_name
@@ -175,7 +175,7 @@ module "lambda_cvm_silver" {
   function_name = "fii-data-ai-platform-dev-cvm-raw-to-silver"
 
   image_uri = (
-    "${module.ecr_cvm_silver.repository_url}:v0.1.2"
+    "${module.ecr_cvm_silver.repository_url}:v0.1.3"
   )
 
   data_lake_bucket_name = module.s3_data_lake.bucket_name
@@ -204,7 +204,7 @@ module "lambda_b3_instruments_silver" {
   function_name = "fii-data-ai-platform-dev-b3-instruments-raw-to-silver"
 
   image_uri = (
-    "${module.ecr_b3_instruments_silver.repository_url}:v0.1.1"
+    "${module.ecr_b3_instruments_silver.repository_url}:v0.1.2"
   )
 
   data_lake_bucket_name = module.s3_data_lake.bucket_name
