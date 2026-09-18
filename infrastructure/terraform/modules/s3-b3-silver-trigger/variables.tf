@@ -42,3 +42,13 @@ variable "b3_instruments_lambda_function_arn" {
   description = "ARN of the B3 Instruments RAW to Silver Lambda."
   type        = string
 }
+
+variable "gold_readiness_lambda_function_name" {
+  description = "Name of the Gold readiness coordinator Lambda."
+  type        = string
+}
+
+variable "gold_readiness_lambda_function_arn" {
+  description = "ARN of the Gold readiness coordinator Lambda."
+  type        = string
+}

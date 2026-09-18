@@ -309,7 +309,7 @@ module "lambda_fii_master_gold" {
   function_name = "fii-data-ai-platform-dev-fii-master-gold"
 
   image_uri = (
-    "${module.ecr_fii_master_gold.repository_url}:v0.1.1"
+    "${module.ecr_fii_master_gold.repository_url}:v0.1.2"
   )
 
   data_lake_bucket_name = module.s3_data_lake.bucket_name
@@ -329,5 +329,44 @@ module "lambda_fii_master_gold" {
 
   depends_on = [
     module.ecr_fii_master_gold
+  ]
+}
+
+module "lambda_gold_readiness" {
+  source = "../../modules/lambda-gold-readiness"
+
+  function_name = "fii-data-ai-platform-dev-gold-readiness"
+
+  filename = "../../../../lambda/gold-readiness/build/gold_readiness.zip"
+
+  source_code_hash = filebase64sha256(
+    "../../../../lambda/gold-readiness/build/gold_readiness.zip"
+  )
+
+  data_lake_bucket_name = module.s3_data_lake.bucket_name
+  data_lake_bucket_arn  = module.s3_data_lake.bucket_arn
+
+  gold_lambda_function_name = (
+    module.lambda_fii_master_gold.function_name
+  )
+
+  gold_lambda_function_arn = (
+    module.lambda_fii_master_gold.function_arn
+  )
+
+  timeout     = 30
+  memory_size = 128
+
+  log_retention_days = 14
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "GoldReadiness"
+    ManagedBy   = "Terraform"
+  }
+
+  depends_on = [
+    module.lambda_fii_master_gold
   ]
 }
