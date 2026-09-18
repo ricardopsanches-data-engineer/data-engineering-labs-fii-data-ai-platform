@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 
+from src.pipelines.b3_instruments_raw_to_s3 import (
+    ingest_daily as ingest_b3_instruments_daily,
+)
 from src.pipelines.b3_raw_to_s3 import ingest_daily as ingest_b3_daily
 from src.pipelines.cvm_raw_to_s3 import ingest_daily as ingest_cvm_daily
 
@@ -16,7 +19,7 @@ def configure_runtime_environment() -> None:
 
     AWS Lambda:
         utiliza /tmp, que é a área gravável
-        disponível durante a execução.
+        durante a execução.
     """
 
     if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
@@ -30,10 +33,14 @@ def configure_runtime_environment() -> None:
 
 def run_daily_ingestion() -> dict:
     """
-    Executa a ingestão diária das fontes B3 e CVM.
+    Executa a ingestão diária das fontes:
+
+    - B3 Trades
+    - CVM
+    - B3 Instruments
 
     As fontes são independentes:
-    falha em uma não impede a tentativa da outra.
+    falha em uma não impede a tentativa das demais.
 
     Ao final, se qualquer fonte falhar,
     a execução é marcada como erro para que
@@ -48,6 +55,10 @@ def run_daily_ingestion() -> dict:
             "error": None,
         },
         "cvm": {
+            "status": "pending",
+            "error": None,
+        },
+        "b3_instruments": {
             "status": "pending",
             "error": None,
         },
@@ -89,6 +100,22 @@ def run_daily_ingestion() -> dict:
             f"{error}"
         )
 
+    print()
+
+    try:
+        ingest_b3_instruments_daily()
+
+        results["b3_instruments"]["status"] = "success"
+
+    except Exception as error:
+        results["b3_instruments"]["status"] = "error"
+        results["b3_instruments"]["error"] = str(error)
+
+        print(
+            "B3 Instruments | ERROR | "
+            f"{error}"
+        )
+
     finished_at = datetime.now(UTC)
 
     results["started_at"] = started_at.isoformat()
@@ -98,13 +125,21 @@ def run_daily_ingestion() -> dict:
     print("======================================")
     print("Resumo final")
     print("======================================")
-    print(f"B3:  {results['b3']['status']}")
-    print(f"CVM: {results['cvm']['status']}")
+    print(f"B3:             {results['b3']['status']}")
+    print(f"CVM:            {results['cvm']['status']}")
+    print(
+        "B3 Instruments: "
+        f"{results['b3_instruments']['status']}"
+    )
     print(f"Fim UTC: {finished_at.isoformat()}")
 
     failed_sources = [
         source
-        for source in ("b3", "cvm")
+        for source in (
+            "b3",
+            "cvm",
+            "b3_instruments",
+        )
         if results[source]["status"] == "error"
     ]
 
