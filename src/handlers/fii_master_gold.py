@@ -80,6 +80,15 @@ SILVER_PREFIXES = {
 }
 
 
+REQUIRED_EVENT_INPUTS = {
+    "b3_trades": "b3",
+    "cvm": "cvm",
+    "b3_instruments": (
+        "b3-instruments"
+    ),
+}
+
+
 def parse_partition_date(
     key: str,
     source: str,
@@ -193,6 +202,200 @@ def find_latest_object(
     return objects[-1]
 
 
+def validate_object_exists(
+    bucket: str,
+    key: str,
+) -> None:
+    boto3.client(
+        "s3"
+    ).head_object(
+        Bucket=bucket,
+        Key=key,
+    )
+
+
+def parse_event_reference_date(
+    value: str,
+    input_name: str,
+) -> date:
+    try:
+        return date.fromisoformat(
+            value
+        )
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise ValueError(
+            "Invalid reference_date for "
+            f"{input_name}: {value}. "
+            "Expected YYYY-MM-DD."
+        ) from exc
+
+
+def resolve_explicit_inputs(
+    bucket: str,
+    event: dict,
+) -> dict | None:
+    inputs = event.get(
+        "inputs"
+    )
+
+    if inputs is None:
+        return None
+
+    if not isinstance(
+        inputs,
+        dict,
+    ):
+        raise ValueError(
+            "Event field 'inputs' "
+            "must be an object."
+        )
+
+    resolved: dict[
+        str,
+        dict,
+    ] = {}
+
+    for (
+        input_name,
+        source,
+    ) in REQUIRED_EVENT_INPUTS.items():
+        input_data = inputs.get(
+            input_name
+        )
+
+        if not isinstance(
+            input_data,
+            dict,
+        ):
+            raise ValueError(
+                "Missing or invalid Gold "
+                f"input: {input_name}."
+            )
+
+        key = input_data.get(
+            "key"
+        )
+
+        reference_date_value = (
+            input_data.get(
+                "reference_date"
+            )
+        )
+
+        if not key:
+            raise ValueError(
+                "Missing key for Gold "
+                f"input: {input_name}."
+            )
+
+        if not reference_date_value:
+            raise ValueError(
+                "Missing reference_date "
+                "for Gold input: "
+                f"{input_name}."
+            )
+
+        partition_date = (
+            parse_partition_date(
+                key=key,
+                source=source,
+            )
+        )
+
+        if partition_date is None:
+            raise ValueError(
+                "Invalid Silver key for "
+                f"{input_name}: {key}"
+            )
+
+        reference_date = (
+            parse_event_reference_date(
+                value=(
+                    reference_date_value
+                ),
+                input_name=input_name,
+            )
+        )
+
+        if (
+            partition_date
+            != reference_date
+        ):
+            raise ValueError(
+                "Gold input reference_date "
+                "does not match its Silver "
+                "partition. "
+                f"input={input_name} | "
+                f"reference_date="
+                f"{reference_date} | "
+                f"partition_date="
+                f"{partition_date}"
+            )
+
+        validate_object_exists(
+            bucket=bucket,
+            key=key,
+        )
+
+        resolved[
+            input_name
+        ] = {
+            "source": source,
+            "reference_date":
+                reference_date,
+            "key": key,
+        }
+
+    instruments_date = (
+        resolved[
+            "b3_instruments"
+        ][
+            "reference_date"
+        ]
+    )
+
+    cvm_date = (
+        resolved[
+            "cvm"
+        ][
+            "reference_date"
+        ]
+    )
+
+    trades_date = (
+        resolved[
+            "b3_trades"
+        ][
+            "reference_date"
+        ]
+    )
+
+    if cvm_date > instruments_date:
+        raise ValueError(
+            "CVM Silver reference_date "
+            "cannot be newer than "
+            "B3 Instruments. "
+            f"cvm={cvm_date} | "
+            f"instruments="
+            f"{instruments_date}"
+        )
+
+    if trades_date > instruments_date:
+        raise ValueError(
+            "B3 Trades reference_date "
+            "cannot be newer than "
+            "B3 Instruments. "
+            f"trades={trades_date} | "
+            f"instruments="
+            f"{instruments_date}"
+        )
+
+    return resolved
+
+
 def download_object(
     bucket: str,
     key: str,
@@ -228,6 +431,8 @@ def build_gold_s3_key(
 
 def run_fii_master_gold(
     bucket: str,
+    explicit_inputs: dict | None = None,
+    run_date: str | None = None,
 ) -> dict:
     print(
         "======================================"
@@ -239,13 +444,91 @@ def run_fii_master_gold(
         "======================================"
     )
 
-    (
-        instruments_date,
-        instruments_key,
-    ) = find_latest_object(
-        bucket=bucket,
-        source="b3-instruments",
-    )
+    if explicit_inputs is None:
+        print(
+            "Modo de seleção: latest "
+            "compatible Silvers"
+        )
+
+        (
+            instruments_date,
+            instruments_key,
+        ) = find_latest_object(
+            bucket=bucket,
+            source="b3-instruments",
+        )
+
+        (
+            cvm_date,
+            cvm_key,
+        ) = find_latest_object(
+            bucket=bucket,
+            source="cvm",
+            max_date=instruments_date,
+        )
+
+        (
+            trades_date,
+            trades_key,
+        ) = find_latest_object(
+            bucket=bucket,
+            source="b3",
+            max_date=instruments_date,
+        )
+
+    else:
+        print(
+            "Modo de seleção: explicit "
+            "Silver inputs"
+        )
+
+        instruments_date = (
+            explicit_inputs[
+                "b3_instruments"
+            ][
+                "reference_date"
+            ]
+        )
+
+        instruments_key = (
+            explicit_inputs[
+                "b3_instruments"
+            ][
+                "key"
+            ]
+        )
+
+        cvm_date = (
+            explicit_inputs[
+                "cvm"
+            ][
+                "reference_date"
+            ]
+        )
+
+        cvm_key = (
+            explicit_inputs[
+                "cvm"
+            ][
+                "key"
+            ]
+        )
+
+        trades_date = (
+            explicit_inputs[
+                "b3_trades"
+            ][
+                "reference_date"
+            ]
+        )
+
+        trades_key = (
+            explicit_inputs[
+                "b3_trades"
+            ][
+                "key"
+            ]
+        )
 
     print(
         "B3 Instruments Silver selecionado | "
@@ -254,29 +537,11 @@ def run_fii_master_gold(
         f"key={instruments_key}"
     )
 
-    (
-        cvm_date,
-        cvm_key,
-    ) = find_latest_object(
-        bucket=bucket,
-        source="cvm",
-        max_date=instruments_date,
-    )
-
     print(
         "CVM Silver selecionado | "
         f"reference_date="
         f"{cvm_date.isoformat()} | "
         f"key={cvm_key}"
-    )
-
-    (
-        trades_date,
-        trades_key,
-    ) = find_latest_object(
-        bucket=bucket,
-        source="b3",
-        max_date=instruments_date,
     )
 
     print(
@@ -377,6 +642,7 @@ def run_fii_master_gold(
 
     return {
         "status": "success",
+        "run_date": run_date,
         "reference_date": (
             gold_reference_date.isoformat()
         ),
@@ -424,6 +690,23 @@ def lambda_handler(
             "is required."
         )
 
+    event = event or {}
+
+    explicit_inputs = (
+        resolve_explicit_inputs(
+            bucket=bucket,
+            event=event,
+        )
+    )
+
+    run_date = event.get(
+        "run_date"
+    )
+
     return run_fii_master_gold(
-        bucket=bucket
+        bucket=bucket,
+        explicit_inputs=(
+            explicit_inputs
+        ),
+        run_date=run_date,
     )
