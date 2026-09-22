@@ -22,7 +22,6 @@ variable "force_destroy" {
 variable "raw_retention_days" {
   description = "Number of days to retain current RAW objects before expiration."
   type        = number
-  default     = 90
 
   validation {
     condition     = var.raw_retention_days >= 1
@@ -33,7 +32,6 @@ variable "raw_retention_days" {
 variable "raw_noncurrent_retention_days" {
   description = "Number of days to retain noncurrent versions of RAW objects."
   type        = number
-  default     = 30
 
   validation {
     condition     = var.raw_noncurrent_retention_days >= 1
@@ -44,7 +42,6 @@ variable "raw_noncurrent_retention_days" {
 variable "incomplete_multipart_retention_days" {
   description = "Number of days before incomplete multipart uploads are aborted."
   type        = number
-  default     = 7
 
   validation {
     condition     = var.incomplete_multipart_retention_days >= 1
