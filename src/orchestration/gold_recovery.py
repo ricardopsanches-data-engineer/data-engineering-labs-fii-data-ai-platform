@@ -614,3 +614,169 @@ def assess_run_date(
             source_states
         ),
     }
+
+def discover_observed_run_dates(
+    *,
+    bucket: str,
+    end_date: date,
+    lookback_days: int,
+) -> list[date]:
+    """
+    Descobre os run_dates realmente observados
+    nas RAWs dentro da janela operacional.
+
+    O run_date é derivado do LastModified
+    convertido para America/Sao_Paulo.
+
+    Não assume calendário de pregão,
+    dias úteis, finais de semana ou feriados.
+    """
+
+    if lookback_days < 1:
+        raise ValueError(
+            "lookback_days must be >= 1."
+        )
+
+    from datetime import timedelta
+
+    start_date = (
+        end_date
+        - timedelta(
+            days=lookback_days - 1
+        )
+    )
+
+    s3 = boto3.client("s3")
+
+    observed_dates: set[date] = set()
+
+    for config in SOURCE_CONFIG.values():
+        prefix = config[
+            "raw_prefix"
+        ]
+
+        pattern = config[
+            "raw_pattern"
+        ]
+
+        paginator = s3.get_paginator(
+            "list_objects_v2"
+        )
+
+        for page in paginator.paginate(
+            Bucket=bucket,
+            Prefix=prefix,
+        ):
+            for item in page.get(
+                "Contents",
+                [],
+            ):
+                key = item[
+                    "Key"
+                ]
+
+                if not pattern.fullmatch(
+                    key
+                ):
+                    continue
+
+                last_modified = item[
+                    "LastModified"
+                ]
+
+                object_run_date = (
+                    last_modified
+                    .astimezone(
+                        PLATFORM_TIMEZONE
+                    )
+                    .date()
+                )
+
+                if (
+                    start_date
+                    <= object_run_date
+                    <= end_date
+                ):
+                    observed_dates.add(
+                        object_run_date
+                    )
+
+    return sorted(
+        observed_dates
+    )
+
+
+def assess_recovery_window(
+    *,
+    bucket: str,
+    end_date: date,
+    lookback_days: int,
+) -> dict[str, Any]:
+    """
+    Diagnostica todos os ciclos observados
+    dentro da janela operacional.
+
+    Esta função NÃO executa recuperação.
+
+    O intervalo é dinâmico e configurável.
+    Dias sem qualquer evidência RAW não são
+    automaticamente considerados falha.
+
+    A detecção de ausência total de um ciclo
+    pertence ao estágio seguinte do recovery.
+    """
+
+    run_dates = (
+        discover_observed_run_dates(
+            bucket=bucket,
+            end_date=end_date,
+            lookback_days=lookback_days,
+        )
+    )
+
+    assessments = [
+        assess_run_date(
+            bucket=bucket,
+            run_date=run_date,
+        )
+        for run_date in run_dates
+    ]
+
+    status_counts: dict[str, int] = {}
+
+    for assessment in assessments:
+        status = assessment[
+            "status"
+        ]
+
+        status_counts[
+            status
+        ] = (
+            status_counts.get(
+                status,
+                0,
+            )
+            + 1
+        )
+
+    return {
+        "window": {
+            "end_date": (
+                end_date.isoformat()
+            ),
+            "lookback_days": (
+                lookback_days
+            ),
+        },
+        "observed_run_dates": [
+            run_date.isoformat()
+            for run_date in run_dates
+        ],
+        "total_cycles": len(
+            assessments
+        ),
+        "status_counts": (
+            status_counts
+        ),
+        "assessments": assessments,
+    }

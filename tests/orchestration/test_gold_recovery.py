@@ -465,3 +465,306 @@ def test_assess_run_date_blocked_when_raw_ambiguous(
     ][0][
         "reason"
     ] == "AMBIGUOUS_RAW"
+
+
+def test_discover_observed_run_dates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePaginator:
+        def paginate(
+            self,
+            *,
+            Bucket: str,
+            Prefix: str,
+        ):
+            if Prefix == "raw/b3/":
+                return [
+                    {
+                        "Contents": [
+                            {
+                                "Key": (
+                                    "raw/b3/"
+                                    "year=2026/"
+                                    "month=09/"
+                                    "day=18/"
+                                    "b3_download_"
+                                    "20260918.zip"
+                                ),
+                                "LastModified": (
+                                    datetime(
+                                        2026,
+                                        9,
+                                        21,
+                                        10,
+                                        1,
+                                        0,
+                                        tzinfo=(
+                                            timezone.utc
+                                        ),
+                                    )
+                                ),
+                            },
+                            {
+                                "Key": (
+                                    "raw/b3/"
+                                    "year=2026/"
+                                    "month=09/"
+                                    "day=21/"
+                                    "b3_download_"
+                                    "20260921.zip"
+                                ),
+                                "LastModified": (
+                                    datetime(
+                                        2026,
+                                        9,
+                                        22,
+                                        10,
+                                        1,
+                                        0,
+                                        tzinfo=(
+                                            timezone.utc
+                                        ),
+                                    )
+                                ),
+                            },
+                        ]
+                    }
+                ]
+
+            if Prefix == "raw/cvm/":
+                return [
+                    {
+                        "Contents": [
+                            {
+                                "Key": (
+                                    "raw/cvm/"
+                                    "year=2026/"
+                                    "month=09/"
+                                    "day=22/"
+                                    "registro_"
+                                    "fundo_classe.zip"
+                                ),
+                                "LastModified": (
+                                    datetime(
+                                        2026,
+                                        9,
+                                        22,
+                                        10,
+                                        0,
+                                        55,
+                                        tzinfo=(
+                                            timezone.utc
+                                        ),
+                                    )
+                                ),
+                            }
+                        ]
+                    }
+                ]
+
+            return [
+                {
+                    "Contents": [
+                        {
+                            "Key": (
+                                "raw/"
+                                "b3-instruments/"
+                                "year=2026/"
+                                "month=09/"
+                                "day=22/"
+                                "pesquisa-pregao.zip"
+                            ),
+                            "LastModified": (
+                                datetime(
+                                    2026,
+                                    9,
+                                    22,
+                                    10,
+                                    0,
+                                    56,
+                                    tzinfo=(
+                                        timezone.utc
+                                    ),
+                                )
+                            ),
+                        }
+                    ]
+                }
+            ]
+
+    class FakeS3:
+        def get_paginator(
+            self,
+            name: str,
+        ):
+            assert (
+                name
+                == "list_objects_v2"
+            )
+
+            return FakePaginator()
+
+    monkeypatch.setattr(
+        gold_recovery.boto3,
+        "client",
+        lambda service: FakeS3(),
+    )
+
+    result = (
+        gold_recovery
+        .discover_observed_run_dates(
+            bucket=BUCKET,
+            end_date=RUN_DATE,
+            lookback_days=30,
+        )
+    )
+
+    assert result == [
+        date(
+            2026,
+            9,
+            21,
+        ),
+        date(
+            2026,
+            9,
+            22,
+        ),
+    ]
+
+
+def test_discover_observed_run_dates_validates_lookback() -> None:
+    with pytest.raises(
+        ValueError,
+        match=(
+            "lookback_days "
+            "must be >= 1"
+        ),
+    ):
+        (
+            gold_recovery
+            .discover_observed_run_dates(
+                bucket=BUCKET,
+                end_date=RUN_DATE,
+                lookback_days=0,
+            )
+        )
+
+
+def test_assess_recovery_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_dates = [
+        date(
+            2026,
+            9,
+            18,
+        ),
+        date(
+            2026,
+            9,
+            21,
+        ),
+        date(
+            2026,
+            9,
+            22,
+        ),
+    ]
+
+    monkeypatch.setattr(
+        gold_recovery,
+        "discover_observed_run_dates",
+        lambda **kwargs: observed_dates,
+    )
+
+    statuses = {
+        "2026-09-18": "COMPLETE",
+        "2026-09-21": (
+            "GOLD_RETRY_REQUIRED"
+        ),
+        "2026-09-22": (
+            "RAW_REBUILD_REQUIRED"
+        ),
+    }
+
+    monkeypatch.setattr(
+        gold_recovery,
+        "assess_run_date",
+        lambda *, bucket, run_date: {
+            "status": statuses[
+                run_date.isoformat()
+            ],
+            "run_date": (
+                run_date.isoformat()
+            ),
+        },
+    )
+
+    result = (
+        gold_recovery
+        .assess_recovery_window(
+            bucket=BUCKET,
+            end_date=RUN_DATE,
+            lookback_days=30,
+        )
+    )
+
+    assert result[
+        "observed_run_dates"
+    ] == [
+        "2026-09-18",
+        "2026-09-21",
+        "2026-09-22",
+    ]
+
+    assert result[
+        "total_cycles"
+    ] == 3
+
+    assert result[
+        "status_counts"
+    ] == {
+        "COMPLETE": 1,
+        "GOLD_RETRY_REQUIRED": 1,
+        "RAW_REBUILD_REQUIRED": 1,
+    }
+
+    assert len(
+        result["assessments"]
+    ) == 3
+
+
+def test_assess_recovery_window_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        gold_recovery,
+        "discover_observed_run_dates",
+        lambda **kwargs: [],
+    )
+
+    result = (
+        gold_recovery
+        .assess_recovery_window(
+            bucket=BUCKET,
+            end_date=RUN_DATE,
+            lookback_days=30,
+        )
+    )
+
+    assert result[
+        "observed_run_dates"
+    ] == []
+
+    assert result[
+        "total_cycles"
+    ] == 0
+
+    assert result[
+        "status_counts"
+    ] == {}
+
+    assert result[
+        "assessments"
+    ] == []
