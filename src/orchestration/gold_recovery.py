@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import re
 
-from datetime import date
-from typing import Any
+from datetime import date, timedelta
+from typing import Any, Iterable
 
 import boto3
 from botocore.exceptions import ClientError
 
+from src.orchestration.gold_expected_cycles import (
+    generate_expected_run_dates,
+)
 from src.orchestration.gold_readiness import (
     PLATFORM_TIMEZONE,
 )
@@ -82,6 +85,21 @@ SOURCE_CONFIG = {
             "b3_instruments"
         ),
     },
+}
+
+
+ACTION_BY_STATUS = {
+    "COMPLETE": "NO_ACTION",
+    "GOLD_RETRY_REQUIRED": "RETRY_GOLD",
+    "RAW_REBUILD_REQUIRED": (
+        "REBUILD_SILVER_FROM_RAW"
+    ),
+    "RECOVERY_BLOCKED": (
+        "ALERT_AND_INVESTIGATE"
+    ),
+    "MISSING_CYCLE": (
+        "INVESTIGATE_MISSING_CYCLE"
+    ),
 }
 
 
@@ -615,6 +633,7 @@ def assess_run_date(
         ),
     }
 
+
 def discover_observed_run_dates(
     *,
     bucket: str,
@@ -636,8 +655,6 @@ def discover_observed_run_dates(
         raise ValueError(
             "lookback_days must be >= 1."
         )
-
-    from datetime import timedelta
 
     start_date = (
         end_date
@@ -742,7 +759,10 @@ def assess_recovery_window(
         for run_date in run_dates
     ]
 
-    status_counts: dict[str, int] = {}
+    status_counts: dict[
+        str,
+        int,
+    ] = {}
 
     for assessment in assessments:
         status = assessment[
@@ -770,7 +790,8 @@ def assess_recovery_window(
         },
         "observed_run_dates": [
             run_date.isoformat()
-            for run_date in run_dates
+            for run_date
+            in run_dates
         ],
         "total_cycles": len(
             assessments
@@ -779,4 +800,417 @@ def assess_recovery_window(
             status_counts
         ),
         "assessments": assessments,
+    }
+
+
+def build_window_start_date(
+    *,
+    end_date: date,
+    lookback_days: int,
+) -> date:
+    """
+    Calcula dinamicamente a primeira data
+    da janela operacional.
+
+    A própria end_date faz parte da janela.
+    """
+
+    if lookback_days < 1:
+        raise ValueError(
+            "lookback_days must be >= 1."
+        )
+
+    return (
+        end_date
+        - timedelta(
+            days=lookback_days - 1
+        )
+    )
+
+
+def build_missing_cycle_assessment(
+    *,
+    run_date: date,
+) -> dict[str, Any]:
+    """
+    Cria diagnóstico para um ciclo que era
+    esperado pelo calendário operacional,
+    mas não deixou qualquer evidência RAW.
+
+    Nenhuma recuperação é executada.
+    """
+
+    status = "MISSING_CYCLE"
+
+    return {
+        "status": status,
+        "run_date": (
+            run_date.isoformat()
+        ),
+        "action": (
+            ACTION_BY_STATUS[
+                status
+            ]
+        ),
+        "reason": (
+            "NO_OBSERVED_RAW_EVIDENCE"
+        ),
+    }
+
+
+def normalize_recovery_assessment(
+    assessment: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Acrescenta ao diagnóstico a ação
+    correspondente ao seu status.
+
+    O conteúdo original é preservado.
+    """
+
+    status = assessment[
+        "status"
+    ]
+
+    if status not in (
+        ACTION_BY_STATUS
+    ):
+        raise ValueError(
+            "Unsupported recovery status: "
+            f"{status}"
+        )
+
+    return {
+        **assessment,
+        "action": (
+            ACTION_BY_STATUS[
+                status
+            ]
+        ),
+    }
+
+
+def build_status_counts(
+    *,
+    assessments: Iterable[
+        dict[str, Any]
+    ],
+) -> dict[str, int]:
+    """
+    Conta ciclos por status.
+    """
+
+    counts: dict[
+        str,
+        int,
+    ] = {}
+
+    for assessment in assessments:
+        status = assessment[
+            "status"
+        ]
+
+        counts[
+            status
+        ] = (
+            counts.get(
+                status,
+                0,
+            )
+            + 1
+        )
+
+    return counts
+
+
+def build_action_counts(
+    *,
+    assessments: Iterable[
+        dict[str, Any]
+    ],
+) -> dict[str, int]:
+    """
+    Conta ciclos por ação recomendada.
+    """
+
+    counts: dict[
+        str,
+        int,
+    ] = {}
+
+    for assessment in assessments:
+        action = assessment[
+            "action"
+        ]
+
+        counts[
+            action
+        ] = (
+            counts.get(
+                action,
+                0,
+            )
+            + 1
+        )
+
+    return counts
+
+
+def build_recovery_plan(
+    *,
+    bucket: str,
+    end_date: date,
+    lookback_days: int,
+    expected_weekdays: (
+        Iterable[int]
+        | None
+    ) = None,
+    excluded_dates: (
+        Iterable[date]
+        | None
+    ) = None,
+) -> dict[str, Any]:
+    """
+    Constrói o plano consolidado de
+    recuperação operacional.
+
+    Esta função NÃO executa ações AWS.
+
+    Combina:
+
+    1. calendário operacional esperado;
+    2. ciclos observados fisicamente;
+    3. diagnóstico de cada run_date;
+    4. ciclos totalmente ausentes;
+    5. ação recomendada por ciclo.
+
+    Status possíveis:
+
+    COMPLETE
+        Gold já existe.
+
+    GOLD_RETRY_REQUIRED
+        As Silvers existem e a Gold precisa
+        ser reconstruída.
+
+    RAW_REBUILD_REQUIRED
+        Existe RAW para reconstruir uma
+        ou mais Silvers.
+
+    RECOVERY_BLOCKED
+        A recuperação automática não pode
+        continuar com segurança.
+
+    MISSING_CYCLE
+        O ciclo era esperado, mas não existe
+        evidência RAW daquele run_date.
+    """
+
+    start_date = (
+        build_window_start_date(
+            end_date=end_date,
+            lookback_days=(
+                lookback_days
+            ),
+        )
+    )
+
+    expected_run_dates = (
+        generate_expected_run_dates(
+            start_date=start_date,
+            end_date=end_date,
+            expected_weekdays=(
+                expected_weekdays
+            ),
+            excluded_dates=(
+                excluded_dates
+            ),
+        )
+    )
+
+    observed_run_dates = (
+        discover_observed_run_dates(
+            bucket=bucket,
+            end_date=end_date,
+            lookback_days=(
+                lookback_days
+            ),
+        )
+    )
+
+    expected_set = set(
+        expected_run_dates
+    )
+
+    observed_set = set(
+        observed_run_dates
+    )
+
+    missing_run_dates = sorted(
+        expected_set
+        - observed_set
+    )
+
+    unexpected_observed_run_dates = (
+        sorted(
+            observed_set
+            - expected_set
+        )
+    )
+
+    assessments: list[
+        dict[str, Any]
+    ] = []
+
+    for run_date in sorted(
+        observed_set
+    ):
+        assessment = (
+            assess_run_date(
+                bucket=bucket,
+                run_date=run_date,
+            )
+        )
+
+        normalized = (
+            normalize_recovery_assessment(
+                assessment
+            )
+        )
+
+        normalized[
+            "calendar_status"
+        ] = (
+            "EXPECTED"
+            if run_date
+            in expected_set
+            else "UNEXPECTED_OBSERVED"
+        )
+
+        assessments.append(
+            normalized
+        )
+
+    for run_date in (
+        missing_run_dates
+    ):
+        missing_assessment = (
+            build_missing_cycle_assessment(
+                run_date=run_date
+            )
+        )
+
+        missing_assessment[
+            "calendar_status"
+        ] = "EXPECTED"
+
+        assessments.append(
+            missing_assessment
+        )
+
+    assessments.sort(
+        key=lambda item: (
+            item[
+                "run_date"
+            ]
+        )
+    )
+
+    status_counts = (
+        build_status_counts(
+            assessments=(
+                assessments
+            )
+        )
+    )
+
+    action_counts = (
+        build_action_counts(
+            assessments=(
+                assessments
+            )
+        )
+    )
+
+    actionable_cycles = [
+        assessment
+        for assessment
+        in assessments
+        if assessment[
+            "action"
+        ] != "NO_ACTION"
+    ]
+
+    blocked_cycles = [
+        assessment
+        for assessment
+        in assessments
+        if assessment[
+            "status"
+        ]
+        in {
+            "RECOVERY_BLOCKED",
+            "MISSING_CYCLE",
+        }
+    ]
+
+    return {
+        "status": (
+            "RECOVERY_REQUIRED"
+            if actionable_cycles
+            else "COMPLETE"
+        ),
+        "window": {
+            "start_date": (
+                start_date.isoformat()
+            ),
+            "end_date": (
+                end_date.isoformat()
+            ),
+            "lookback_days": (
+                lookback_days
+            ),
+        },
+        "expected_run_dates": [
+            run_date.isoformat()
+            for run_date
+            in expected_run_dates
+        ],
+        "observed_run_dates": [
+            run_date.isoformat()
+            for run_date
+            in sorted(
+                observed_set
+            )
+        ],
+        "missing_run_dates": [
+            run_date.isoformat()
+            for run_date
+            in missing_run_dates
+        ],
+        "unexpected_observed_run_dates": [
+            run_date.isoformat()
+            for run_date
+            in (
+                unexpected_observed_run_dates
+            )
+        ],
+        "total_assessments": len(
+            assessments
+        ),
+        "status_counts": (
+            status_counts
+        ),
+        "action_counts": (
+            action_counts
+        ),
+        "actionable_cycles": len(
+            actionable_cycles
+        ),
+        "blocked_cycles": len(
+            blocked_cycles
+        ),
+        "assessments": (
+            assessments
+        ),
     }
