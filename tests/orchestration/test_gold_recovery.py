@@ -768,3 +768,194 @@ def test_assess_recovery_window_empty(
     assert result[
         "assessments"
     ] == []
+
+def test_assess_run_date_in_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        gold_recovery,
+        "object_exists",
+        lambda **kwargs: False,
+    )
+
+    monkeypatch.setattr(
+        gold_recovery,
+        "assess_gold_recovery_state",
+        lambda **kwargs: {
+            "classification": {
+                "status": "IN_PROGRESS",
+                "reason": (
+                    "STARTED_EXECUTION_ACTIVE"
+                ),
+                "retry_allowed": False,
+            }
+        },
+    )
+
+    result = (
+        gold_recovery
+        .assess_run_date(
+            bucket=BUCKET,
+            run_date=RUN_DATE,
+        )
+    )
+
+    assert result[
+        "status"
+    ] == "IN_PROGRESS"
+
+    assert result[
+        "reason"
+    ] == (
+        "STARTED_EXECUTION_ACTIVE"
+    )
+
+
+def test_assess_run_date_blocks_inconsistent_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        gold_recovery,
+        "object_exists",
+        lambda **kwargs: False,
+    )
+
+    monkeypatch.setattr(
+        gold_recovery,
+        "assess_gold_recovery_state",
+        lambda **kwargs: {
+            "classification": {
+                "status": (
+                    "INCONSISTENT_STATE"
+                ),
+                "reason": (
+                    "EXECUTION_SUCCEEDED_"
+                    "BUT_GOLD_OBJECT_MISSING"
+                ),
+                "retry_allowed": False,
+            }
+        },
+    )
+
+    result = (
+        gold_recovery
+        .assess_run_date(
+            bucket=BUCKET,
+            run_date=RUN_DATE,
+        )
+    )
+
+    assert result[
+        "status"
+    ] == "RECOVERY_BLOCKED"
+
+    assert result[
+        "reason"
+    ] == (
+        "EXECUTION_SUCCEEDED_"
+        "BUT_GOLD_OBJECT_MISSING"
+    )
+
+
+def test_assess_run_date_failed_state_can_retry_gold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_states = (
+        build_source_states()
+    )
+
+    monkeypatch.setattr(
+        gold_recovery,
+        "object_exists",
+        lambda **kwargs: False,
+    )
+
+    monkeypatch.setattr(
+        gold_recovery,
+        "assess_gold_recovery_state",
+        lambda **kwargs: {
+            "classification": {
+                "status": (
+                    "RETRY_ALLOWED"
+                ),
+                "reason": (
+                    "PREVIOUS_EXECUTION_FAILED"
+                ),
+                "retry_allowed": True,
+            }
+        },
+    )
+
+    monkeypatch.setattr(
+        gold_recovery,
+        "discover_source_state",
+        lambda *, bucket, source, run_date: (
+            source_states[source]
+        ),
+    )
+
+    result = (
+        gold_recovery
+        .assess_run_date(
+            bucket=BUCKET,
+            run_date=RUN_DATE,
+        )
+    )
+
+    assert result[
+        "status"
+    ] == (
+        "GOLD_RETRY_REQUIRED"
+    )
+
+
+def test_assess_run_date_stale_started_can_retry_gold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_states = (
+        build_source_states()
+    )
+
+    monkeypatch.setattr(
+        gold_recovery,
+        "object_exists",
+        lambda **kwargs: False,
+    )
+
+    monkeypatch.setattr(
+        gold_recovery,
+        "assess_gold_recovery_state",
+        lambda **kwargs: {
+            "classification": {
+                "status": (
+                    "RETRY_ALLOWED"
+                ),
+                "reason": (
+                    "STARTED_EXECUTION_STALE"
+                ),
+                "retry_allowed": True,
+            }
+        },
+    )
+
+    monkeypatch.setattr(
+        gold_recovery,
+        "discover_source_state",
+        lambda *, bucket, source, run_date: (
+            source_states[source]
+        ),
+    )
+
+    result = (
+        gold_recovery
+        .assess_run_date(
+            bucket=BUCKET,
+            run_date=RUN_DATE,
+        )
+    )
+
+    assert result[
+        "status"
+    ] == (
+        "GOLD_RETRY_REQUIRED"
+    )

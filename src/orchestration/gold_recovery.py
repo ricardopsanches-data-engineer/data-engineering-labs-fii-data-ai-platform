@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import re
 
-from datetime import date, timedelta
+from datetime import (
+    date,
+    datetime,
+    timedelta,
+    timezone,
+)
 from typing import Any, Iterable
 
 import boto3
@@ -13,6 +18,10 @@ from src.orchestration.gold_expected_cycles import (
 )
 from src.orchestration.gold_readiness import (
     PLATFORM_TIMEZONE,
+)
+from src.orchestration.gold_recovery_state import (
+    DEFAULT_STALE_AFTER_MINUTES,
+    assess_gold_recovery_state,
 )
 
 
@@ -90,6 +99,7 @@ SOURCE_CONFIG = {
 
 ACTION_BY_STATUS = {
     "COMPLETE": "NO_ACTION",
+    "IN_PROGRESS": "WAIT_FOR_COMPLETION",
     "GOLD_RETRY_REQUIRED": "RETRY_GOLD",
     "RAW_REBUILD_REQUIRED": (
         "REBUILD_SILVER_FROM_RAW"
@@ -437,6 +447,10 @@ def assess_run_date(
     *,
     bucket: str,
     run_date: date,
+    now: datetime | None = None,
+    stale_after_minutes: int = (
+        DEFAULT_STALE_AFTER_MINUTES
+    ),
 ) -> dict[str, Any]:
     """
     Diagnostica recovery operacional
@@ -444,33 +458,80 @@ def assess_run_date(
 
     Esta função NÃO executa recuperação.
 
+    O diagnóstico combina:
+
+    - existência física da Gold;
+    - execution state da Gold;
+    - existência física das Silvers;
+    - existência física das RAWs.
+
     COMPLETE
         Gold já existe.
 
+    IN_PROGRESS
+        Gold ainda não existe, mas existe
+        execução STARTED ainda válida.
+
     GOLD_RETRY_REQUIRED
-        Gold não existe, mas existe
-        exatamente uma Silver física
-        para cada fonte.
+        Gold não existe, a execução permite
+        retry e todas as Silvers existem.
 
     RAW_REBUILD_REQUIRED
         Uma ou mais Silvers estão ausentes,
         porém existe exatamente um RAW
-        correspondente para cada fonte
-        que precisa ser reconstruída.
+        correspondente para cada fonte.
 
     RECOVERY_BLOCKED
-        Uma Silver está ausente e o RAW
-        necessário também está ausente,
-        ou existe ambiguidade física.
+        Recuperação automática não pode
+        prosseguir com segurança.
     """
+
+    effective_now = (
+        now
+        if now is not None
+        else datetime.now(
+            timezone.utc
+        )
+    )
 
     gold_key = build_gold_key(
         run_date
     )
 
-    if object_exists(
+    gold_exists = object_exists(
         bucket=bucket,
         key=gold_key,
+    )
+
+    execution_assessment = (
+        assess_gold_recovery_state(
+            bucket=bucket,
+            run_date=(
+                run_date.isoformat()
+            ),
+            gold_exists=gold_exists,
+            now=effective_now,
+            stale_after_minutes=(
+                stale_after_minutes
+            ),
+        )
+    )
+
+    classification = (
+        execution_assessment[
+            "classification"
+        ]
+    )
+
+    classification_status = (
+        classification[
+            "status"
+        ]
+    )
+
+    if (
+        classification_status
+        == "COMPLETE"
     ):
         return {
             "status": "COMPLETE",
@@ -478,6 +539,51 @@ def assess_run_date(
                 run_date.isoformat()
             ),
             "gold_key": gold_key,
+            "execution_assessment": (
+                execution_assessment
+            ),
+        }
+
+    if (
+        classification_status
+        == "IN_PROGRESS"
+    ):
+        return {
+            "status": "IN_PROGRESS",
+            "reason": (
+                classification[
+                    "reason"
+                ]
+            ),
+            "run_date": (
+                run_date.isoformat()
+            ),
+            "gold_key": gold_key,
+            "execution_assessment": (
+                execution_assessment
+            ),
+        }
+
+    if classification_status in {
+        "INCONSISTENT_STATE",
+        "UNKNOWN_STATE",
+    }:
+        return {
+            "status": (
+                "RECOVERY_BLOCKED"
+            ),
+            "reason": (
+                classification[
+                    "reason"
+                ]
+            ),
+            "run_date": (
+                run_date.isoformat()
+            ),
+            "gold_key": gold_key,
+            "execution_assessment": (
+                execution_assessment
+            ),
         }
 
     source_states = {
@@ -519,6 +625,9 @@ def assess_run_date(
             "source_states": (
                 source_states
             ),
+            "execution_assessment": (
+                execution_assessment
+            ),
         }
 
     missing_silver_sources = [
@@ -555,6 +664,9 @@ def assess_run_date(
             ),
             "gold_payload": (
                 gold_payload
+            ),
+            "execution_assessment": (
+                execution_assessment
             ),
         }
 
@@ -615,6 +727,9 @@ def assess_run_date(
             "source_states": (
                 source_states
             ),
+            "execution_assessment": (
+                execution_assessment
+            ),
         }
 
     return {
@@ -630,6 +745,9 @@ def assess_run_date(
         ),
         "source_states": (
             source_states
+        ),
+        "execution_assessment": (
+            execution_assessment
         ),
     }
 
@@ -1138,7 +1256,11 @@ def build_recovery_plan(
         in assessments
         if assessment[
             "action"
-        ] != "NO_ACTION"
+        ]
+        not in {
+            "NO_ACTION",
+            "WAIT_FOR_COMPLETION",
+        }
     ]
 
     blocked_cycles = [
