@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import os
 import re
+
 from argparse import Namespace
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import boto3
 import pandas as pd
 
+from src.orchestration.gold_execution_state import (
+    mark_execution_failed,
+    mark_execution_started,
+    mark_execution_succeeded,
+)
+from src.orchestration.gold_readiness import (
+    PLATFORM_TIMEZONE,
+)
 from src.pipelines.fii_master_gold import (
     DEFAULT_MIN_RESOLUTION_RATE,
     run_pipeline,
@@ -16,7 +25,9 @@ from src.pipelines.fii_master_gold import (
 from src.storage.s3 import upload_file
 
 
-TMP_ROOT = Path("/tmp/fii-master-gold")
+TMP_ROOT = Path(
+    "/tmp/fii-master-gold"
+)
 
 TMP_CVM = (
     TMP_ROOT
@@ -93,7 +104,9 @@ def parse_partition_date(
     key: str,
     source: str,
 ) -> date | None:
-    pattern = SILVER_PATTERNS[source]
+    pattern = SILVER_PATTERNS[
+        source
+    ]
 
     match = pattern.fullmatch(
         key
@@ -103,8 +116,11 @@ def parse_partition_date(
         return None
 
     year, month, day = (
-        int(value)
-        for value in match.groups()
+        int(
+            value
+        )
+        for value
+        in match.groups()
     )
 
     return date(
@@ -117,7 +133,12 @@ def parse_partition_date(
 def list_partitioned_objects(
     bucket: str,
     source: str,
-) -> list[tuple[date, str]]:
+) -> list[
+    tuple[
+        date,
+        str,
+    ]
+]:
     s3 = boto3.client(
         "s3"
     )
@@ -129,20 +150,27 @@ def list_partitioned_objects(
     )
 
     objects: list[
-        tuple[date, str]
+        tuple[
+            date,
+            str,
+        ]
     ] = []
 
     for page in paginator.paginate(
         Bucket=bucket,
-        Prefix=SILVER_PREFIXES[
-            source
-        ],
+        Prefix=(
+            SILVER_PREFIXES[
+                source
+            ]
+        ),
     ):
         for item in page.get(
             "Contents",
             [],
         ):
-            key = item["Key"]
+            key = item[
+                "Key"
+            ]
 
             partition_date = (
                 parse_partition_date(
@@ -151,7 +179,10 @@ def list_partitioned_objects(
                 )
             )
 
-            if partition_date is None:
+            if (
+                partition_date
+                is None
+            ):
                 continue
 
             objects.append(
@@ -163,15 +194,23 @@ def list_partitioned_objects(
 
     return sorted(
         objects,
-        key=lambda item: item[0],
+        key=lambda item: (
+            item[0]
+        ),
     )
 
 
 def find_latest_object(
     bucket: str,
     source: str,
-    max_date: date | None = None,
-) -> tuple[date, str]:
+    max_date: (
+        date
+        | None
+    ) = None,
+) -> tuple[
+    date,
+    str,
+]:
     objects = (
         list_partitioned_objects(
             bucket=bucket,
@@ -182,24 +221,30 @@ def find_latest_object(
     if max_date is not None:
         objects = [
             item
-            for item in objects
-            if item[0] <= max_date
+            for item
+            in objects
+            if item[0]
+            <= max_date
         ]
 
     if not objects:
         constraint = (
-            f" <= {max_date.isoformat()}"
-            if max_date is not None
+            f" <= "
+            f"{max_date.isoformat()}"
+            if max_date
+            is not None
             else ""
         )
 
         raise FileNotFoundError(
-            f"No valid Silver object "
+            "No valid Silver object "
             f"found for {source}"
             f"{constraint}."
         )
 
-    return objects[-1]
+    return objects[
+        -1
+    ]
 
 
 def validate_object_exists(
@@ -222,6 +267,7 @@ def parse_event_reference_date(
         return date.fromisoformat(
             value
         )
+
     except (
         TypeError,
         ValueError,
@@ -261,7 +307,9 @@ def resolve_explicit_inputs(
     for (
         input_name,
         source,
-    ) in REQUIRED_EVENT_INPUTS.items():
+    ) in (
+        REQUIRED_EVENT_INPUTS.items()
+    ):
         input_data = inputs.get(
             input_name
         )
@@ -316,7 +364,9 @@ def resolve_explicit_inputs(
                 value=(
                     reference_date_value
                 ),
-                input_name=input_name,
+                input_name=(
+                    input_name
+                ),
             )
         )
 
@@ -329,9 +379,9 @@ def resolve_explicit_inputs(
                 "does not match its Silver "
                 "partition. "
                 f"input={input_name} | "
-                f"reference_date="
+                "reference_date="
                 f"{reference_date} | "
-                f"partition_date="
+                "partition_date="
                 f"{partition_date}"
             )
 
@@ -343,9 +393,12 @@ def resolve_explicit_inputs(
         resolved[
             input_name
         ] = {
-            "source": source,
-            "reference_date":
-                reference_date,
+            "source": (
+                source
+            ),
+            "reference_date": (
+                reference_date
+            ),
             "key": key,
         }
 
@@ -373,23 +426,29 @@ def resolve_explicit_inputs(
         ]
     )
 
-    if cvm_date > instruments_date:
+    if (
+        cvm_date
+        > instruments_date
+    ):
         raise ValueError(
             "CVM Silver reference_date "
             "cannot be newer than "
             "B3 Instruments. "
             f"cvm={cvm_date} | "
-            f"instruments="
+            "instruments="
             f"{instruments_date}"
         )
 
-    if trades_date > instruments_date:
+    if (
+        trades_date
+        > instruments_date
+    ):
         raise ValueError(
             "B3 Trades reference_date "
             "cannot be newer than "
             "B3 Instruments. "
             f"trades={trades_date} | "
-            f"instruments="
+            "instruments="
             f"{instruments_date}"
         )
 
@@ -422,24 +481,137 @@ def build_gold_s3_key(
 ) -> str:
     return (
         "gold/fii-master/"
-        f"year={reference_date.year:04d}/"
-        f"month={reference_date.month:02d}/"
-        f"day={reference_date.day:02d}/"
+        f"year="
+        f"{reference_date.year:04d}/"
+        f"month="
+        f"{reference_date.month:02d}/"
+        f"day="
+        f"{reference_date.day:02d}/"
         "fii_master.parquet"
+    )
+
+
+def resolve_execution_run_date(
+    event: dict,
+) -> str:
+    """
+    Resolve o run_date operacional usado
+    pelo execution state.
+
+    Quando o evento contém run_date, ele
+    precisa estar no formato YYYY-MM-DD.
+
+    Para compatibilidade com invocações
+    manuais antigas sem run_date, usa a
+    data atual em America/Sao_Paulo.
+    """
+
+    run_date_value = event.get(
+        "run_date"
+    )
+
+    if run_date_value is None:
+        return (
+            datetime.now(
+                PLATFORM_TIMEZONE
+            )
+            .date()
+            .isoformat()
+        )
+
+    normalized = str(
+        run_date_value
+    ).strip()
+
+    try:
+        parsed = (
+            date.fromisoformat(
+                normalized
+            )
+        )
+
+    except ValueError as exc:
+        raise ValueError(
+            "Invalid Gold run_date: "
+            f"{run_date_value}. "
+            "Expected YYYY-MM-DD."
+        ) from exc
+
+    return (
+        parsed.isoformat()
+    )
+
+
+def resolve_execution_trigger(
+    event: dict,
+) -> str:
+    """
+    Resolve a origem lógica da execução.
+
+    Exemplos esperados:
+
+    NORMAL
+    RECOVERY
+    MANUAL
+
+    O valor é aberto para permitir novas
+    origens sem alterar o handler.
+    """
+
+    trigger = event.get(
+        "trigger",
+        "NORMAL",
+    )
+
+    normalized = str(
+        trigger
+    ).strip().upper()
+
+    if not normalized:
+        return "NORMAL"
+
+    return normalized
+
+
+def get_request_id(
+    context,
+) -> str | None:
+    """
+    Obtém aws_request_id quando disponível.
+
+    Mantém compatibilidade com testes e
+    execuções locais sem Lambda context.
+    """
+
+    if context is None:
+        return None
+
+    return getattr(
+        context,
+        "aws_request_id",
+        None,
     )
 
 
 def run_fii_master_gold(
     bucket: str,
-    explicit_inputs: dict | None = None,
-    run_date: str | None = None,
+    explicit_inputs: (
+        dict
+        | None
+    ) = None,
+    run_date: (
+        str
+        | None
+    ) = None,
 ) -> dict:
     print(
         "======================================"
     )
+
     print(
         "FII MASTER GOLD | AWS"
     )
+
     print(
         "======================================"
     )
@@ -455,7 +627,9 @@ def run_fii_master_gold(
             instruments_key,
         ) = find_latest_object(
             bucket=bucket,
-            source="b3-instruments",
+            source=(
+                "b3-instruments"
+            ),
         )
 
         (
@@ -464,7 +638,9 @@ def run_fii_master_gold(
         ) = find_latest_object(
             bucket=bucket,
             source="cvm",
-            max_date=instruments_date,
+            max_date=(
+                instruments_date
+            ),
         )
 
         (
@@ -473,7 +649,9 @@ def run_fii_master_gold(
         ) = find_latest_object(
             bucket=bucket,
             source="b3",
-            max_date=instruments_date,
+            max_date=(
+                instruments_date
+            ),
         )
 
     else:
@@ -532,21 +710,21 @@ def run_fii_master_gold(
 
     print(
         "B3 Instruments Silver selecionado | "
-        f"reference_date="
+        "reference_date="
         f"{instruments_date.isoformat()} | "
         f"key={instruments_key}"
     )
 
     print(
         "CVM Silver selecionado | "
-        f"reference_date="
+        "reference_date="
         f"{cvm_date.isoformat()} | "
         f"key={cvm_key}"
     )
 
     print(
         "B3 Trades Silver selecionado | "
-        f"reference_date="
+        "reference_date="
         f"{trades_date.isoformat()} | "
         f"key={trades_key}"
     )
@@ -571,9 +749,13 @@ def run_fii_master_gold(
 
     args = Namespace(
         cvm=TMP_CVM,
-        instruments=TMP_INSTRUMENTS,
+        instruments=(
+            TMP_INSTRUMENTS
+        ),
         trades=TMP_TRADES,
-        output_root=TMP_GOLD_ROOT,
+        output_root=(
+            TMP_GOLD_ROOT
+        ),
         min_resolution_rate=(
             DEFAULT_MIN_RESOLUTION_RATE
         ),
@@ -596,7 +778,9 @@ def run_fii_master_gold(
         .dropna()
     )
 
-    if gold_reference_values.empty:
+    if (
+        gold_reference_values.empty
+    ):
         raise RuntimeError(
             "Gold output has no "
             "reference_date."
@@ -604,7 +788,9 @@ def run_fii_master_gold(
 
     gold_reference_date = (
         pd.Timestamp(
-            gold_reference_values.iloc[0]
+            gold_reference_values.iloc[
+                0
+            ]
         )
         .date()
     )
@@ -617,14 +803,16 @@ def run_fii_master_gold(
             "Gold reference_date does not "
             "match the selected "
             "B3 Instruments partition. "
-            f"gold="
+            "gold="
             f"{gold_reference_date} | "
-            f"instruments="
+            "instruments="
             f"{instruments_date}"
         )
 
-    gold_key = build_gold_s3_key(
-        gold_reference_date
+    gold_key = (
+        build_gold_s3_key(
+            gold_reference_date
+        )
     )
 
     upload_file(
@@ -635,6 +823,7 @@ def run_fii_master_gold(
     )
 
     print()
+
     print(
         "Gold FII Master publicado | "
         f"s3://{bucket}/{gold_key}"
@@ -644,7 +833,8 @@ def run_fii_master_gold(
         "status": "success",
         "run_date": run_date,
         "reference_date": (
-            gold_reference_date.isoformat()
+            gold_reference_date
+            .isoformat()
         ),
         "records": int(
             len(
@@ -653,24 +843,33 @@ def run_fii_master_gold(
         ),
         "inputs": {
             "cvm": {
-                "reference_date":
-                    cvm_date.isoformat(),
+                "reference_date": (
+                    cvm_date
+                    .isoformat()
+                ),
                 "key": cvm_key,
             },
             "b3_instruments": {
-                "reference_date":
-                    instruments_date.isoformat(),
-                "key": instruments_key,
+                "reference_date": (
+                    instruments_date
+                    .isoformat()
+                ),
+                "key": (
+                    instruments_key
+                ),
             },
             "b3_trades": {
-                "reference_date":
-                    trades_date.isoformat(),
+                "reference_date": (
+                    trades_date
+                    .isoformat()
+                ),
                 "key": trades_key,
             },
         },
         "gold_key": gold_key,
         "gold_uri": (
-            f"s3://{bucket}/{gold_key}"
+            f"s3://{bucket}/"
+            f"{gold_key}"
         ),
     }
 
@@ -692,21 +891,148 @@ def lambda_handler(
 
     event = event or {}
 
-    explicit_inputs = (
-        resolve_explicit_inputs(
-            bucket=bucket,
-            event=event,
+    run_date = (
+        resolve_execution_run_date(
+            event
         )
     )
 
-    run_date = event.get(
-        "run_date"
+    trigger = (
+        resolve_execution_trigger(
+            event
+        )
     )
 
-    return run_fii_master_gold(
-        bucket=bucket,
-        explicit_inputs=(
-            explicit_inputs
-        ),
-        run_date=run_date,
+    request_id = (
+        get_request_id(
+            context
+        )
     )
+
+    started_details = {
+        "request_id": request_id,
+        "has_explicit_inputs": (
+            event.get(
+                "inputs"
+            )
+            is not None
+        ),
+    }
+
+    print(
+        "Gold execution state | "
+        f"run_date={run_date} | "
+        f"trigger={trigger} | "
+        "status=STARTED"
+    )
+
+    mark_execution_started(
+        bucket=bucket,
+        run_date=run_date,
+        trigger=trigger,
+        details=(
+            started_details
+        ),
+    )
+
+    try:
+        explicit_inputs = (
+            resolve_explicit_inputs(
+                bucket=bucket,
+                event=event,
+            )
+        )
+
+        result = (
+            run_fii_master_gold(
+                bucket=bucket,
+                explicit_inputs=(
+                    explicit_inputs
+                ),
+                run_date=run_date,
+            )
+        )
+
+        success_details = {
+            "request_id": (
+                request_id
+            ),
+            "reference_date": (
+                result[
+                    "reference_date"
+                ]
+            ),
+            "records": (
+                result[
+                    "records"
+                ]
+            ),
+        }
+
+        mark_execution_succeeded(
+            bucket=bucket,
+            run_date=run_date,
+            trigger=trigger,
+            gold_key=(
+                result[
+                    "gold_key"
+                ]
+            ),
+            details=(
+                success_details
+            ),
+        )
+
+        print(
+            "Gold execution state | "
+            f"run_date={run_date} | "
+            f"trigger={trigger} | "
+            "status=SUCCEEDED"
+        )
+
+        return result
+
+    except Exception as exc:
+        print(
+            "Gold execution state | "
+            f"run_date={run_date} | "
+            f"trigger={trigger} | "
+            "status=FAILED | "
+            f"error_type="
+            f"{type(exc).__name__} | "
+            f"error={exc}"
+        )
+
+        failure_details = {
+            "request_id": (
+                request_id
+            ),
+        }
+
+        try:
+            mark_execution_failed(
+                bucket=bucket,
+                run_date=run_date,
+                trigger=trigger,
+                error_type=(
+                    type(exc).__name__
+                ),
+                error_message=(
+                    str(exc)
+                ),
+                details=(
+                    failure_details
+                ),
+            )
+
+        except Exception as state_exc:
+            print(
+                "WARNING | Failed to persist "
+                "Gold FAILED state | "
+                f"run_date={run_date} | "
+                f"error_type="
+                f"{type(state_exc).__name__} | "
+                f"error={state_exc}"
+            )
+
+        raise
