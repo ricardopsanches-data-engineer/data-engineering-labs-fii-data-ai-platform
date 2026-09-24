@@ -312,6 +312,9 @@ def build_gold_execution_state_event(
     itself or the result returned by
     write_execution_state(), which wraps the
     persisted state under "payload".
+
+    Execution metadata may exist either at the
+    top level or under "details".
     """
 
     wrapped_payload = state.get(
@@ -327,6 +330,32 @@ def build_gold_execution_state_event(
         )
     else:
         execution_state = state
+
+    nested_details = (
+        execution_state.get(
+            "details"
+        )
+    )
+
+    if not isinstance(
+        nested_details,
+        dict,
+    ):
+        nested_details = {}
+
+    def state_value(
+        key: str,
+    ) -> Any:
+        value = execution_state.get(
+            key
+        )
+
+        if value is not None:
+            return value
+
+        return nested_details.get(
+            key
+        )
 
     status = str(
         execution_state.get(
@@ -348,56 +377,36 @@ def build_gold_execution_state_event(
 
     details = _compact_details(
         {
-            "run_date": (
-                execution_state.get(
-                    "run_date"
-                )
+            "run_date": state_value(
+                "run_date"
             ),
             "execution_status": status,
-            "trigger": (
-                execution_state.get(
-                    "trigger"
-                )
+            "trigger": state_value(
+                "trigger"
             ),
-            "request_id": (
-                execution_state.get(
-                    "request_id"
-                )
+            "request_id": state_value(
+                "request_id"
             ),
-            "reference_date": (
-                execution_state.get(
-                    "reference_date"
-                )
+            "reference_date": state_value(
+                "reference_date"
             ),
-            "gold_key": (
-                execution_state.get(
-                    "gold_key"
-                )
+            "gold_key": state_value(
+                "gold_key"
             ),
-            "records": (
-                execution_state.get(
-                    "records"
-                )
+            "records": state_value(
+                "records"
             ),
-            "started_at": (
-                execution_state.get(
-                    "started_at"
-                )
+            "started_at": state_value(
+                "started_at"
             ),
-            "updated_at": (
-                execution_state.get(
-                    "updated_at"
-                )
+            "updated_at": state_value(
+                "updated_at"
             ),
-            "error_type": (
-                execution_state.get(
-                    "error_type"
-                )
+            "error_type": state_value(
+                "error_type"
             ),
-            "error_message": (
-                execution_state.get(
-                    "error_message"
-                )
+            "error_message": state_value(
+                "error_message"
             ),
         }
     )

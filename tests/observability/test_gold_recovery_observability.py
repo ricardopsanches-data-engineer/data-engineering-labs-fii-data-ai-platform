@@ -466,3 +466,60 @@ def test_build_gold_execution_state_event_accepts_wrapped_state(
     assert result[
         "records"
     ] == 388
+
+
+def test_build_gold_execution_state_event_reads_nested_details(
+) -> None:
+    result = (
+        gold_recovery_observability
+        .build_gold_execution_state_event(
+            {
+                "payload": {
+                    "status": "FAILED",
+                    "run_date": (
+                        "2099-01-01"
+                    ),
+                    "trigger": (
+                        "MANUAL_FAILURE_TEST"
+                    ),
+                    "started_at": (
+                        "2026-09-24T12:57:40+00:00"
+                    ),
+                    "updated_at": (
+                        "2026-09-24T12:57:41+00:00"
+                    ),
+                    "details": {
+                        "request_id": (
+                            "request-test"
+                        ),
+                        "error_type": (
+                            "ValueError"
+                        ),
+                        "error_message": (
+                            "Invalid Silver key"
+                        ),
+                    },
+                }
+            }
+        )
+    )
+
+    assert result[
+        "event"
+    ] == "GOLD_EXECUTION_FAILED"
+
+    assert result[
+        "status"
+    ] == "ERROR"
+
+    assert result[
+        "request_id"
+    ] == "request-test"
+
+    assert result[
+        "error_type"
+    ] == "ValueError"
+
+    assert result[
+        "error_message"
+    ] == "Invalid Silver key"
