@@ -410,3 +410,59 @@ def test_emit_gold_execution_state_event_outputs_structured_json(
     assert result[
         "event"
     ] == "GOLD_EXECUTION_FAILED"
+
+
+def test_build_gold_execution_state_event_accepts_wrapped_state(
+) -> None:
+    result = (
+        gold_recovery_observability
+        .build_gold_execution_state_event(
+            {
+                "state_key": (
+                    "control/gold-execution/"
+                    "run_date=2026-09-24/"
+                    "state.json"
+                ),
+                "state_uri": (
+                    "s3://test-bucket/"
+                    "control/gold-execution/"
+                    "run_date=2026-09-24/"
+                    "state.json"
+                ),
+                "payload": {
+                    "status": "SUCCEEDED",
+                    "run_date": (
+                        "2026-09-24"
+                    ),
+                    "trigger": (
+                        "MANUAL_TEST"
+                    ),
+                    "records": 388,
+                },
+            }
+        )
+    )
+
+    assert result[
+        "event"
+    ] == "GOLD_EXECUTION_SUCCEEDED"
+
+    assert result[
+        "status"
+    ] == "INFO"
+
+    assert result[
+        "execution_status"
+    ] == "SUCCEEDED"
+
+    assert result[
+        "run_date"
+    ] == "2026-09-24"
+
+    assert result[
+        "trigger"
+    ] == "MANUAL_TEST"
+
+    assert result[
+        "records"
+    ] == 388

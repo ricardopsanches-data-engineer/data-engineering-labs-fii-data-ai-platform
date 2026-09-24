@@ -307,10 +307,29 @@ def build_gold_execution_state_event(
     """
     Converts persisted Gold execution state
     into an operational observability event.
+
+    Accepts either the persisted state payload
+    itself or the result returned by
+    write_execution_state(), which wraps the
+    persisted state under "payload".
     """
 
+    wrapped_payload = state.get(
+        "payload"
+    )
+
+    if isinstance(
+        wrapped_payload,
+        dict,
+    ):
+        execution_state = (
+            wrapped_payload
+        )
+    else:
+        execution_state = state
+
     status = str(
-        state.get(
+        execution_state.get(
             "status",
             "UNKNOWN",
         )
@@ -329,36 +348,56 @@ def build_gold_execution_state_event(
 
     details = _compact_details(
         {
-            "run_date": state.get(
-                "run_date"
+            "run_date": (
+                execution_state.get(
+                    "run_date"
+                )
             ),
             "execution_status": status,
-            "trigger": state.get(
-                "trigger"
+            "trigger": (
+                execution_state.get(
+                    "trigger"
+                )
             ),
-            "request_id": state.get(
-                "request_id"
+            "request_id": (
+                execution_state.get(
+                    "request_id"
+                )
             ),
-            "reference_date": state.get(
-                "reference_date"
+            "reference_date": (
+                execution_state.get(
+                    "reference_date"
+                )
             ),
-            "gold_key": state.get(
-                "gold_key"
+            "gold_key": (
+                execution_state.get(
+                    "gold_key"
+                )
             ),
-            "records": state.get(
-                "records"
+            "records": (
+                execution_state.get(
+                    "records"
+                )
             ),
-            "started_at": state.get(
-                "started_at"
+            "started_at": (
+                execution_state.get(
+                    "started_at"
+                )
             ),
-            "updated_at": state.get(
-                "updated_at"
+            "updated_at": (
+                execution_state.get(
+                    "updated_at"
+                )
             ),
-            "error_type": state.get(
-                "error_type"
+            "error_type": (
+                execution_state.get(
+                    "error_type"
+                )
             ),
-            "error_message": state.get(
-                "error_message"
+            "error_message": (
+                execution_state.get(
+                    "error_message"
+                )
             ),
         }
     )

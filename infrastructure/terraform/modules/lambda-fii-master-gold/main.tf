@@ -55,7 +55,8 @@ resource "aws_iam_policy" "lambda_execution" {
               "silver/b3/*",
               "silver/cvm/*",
               "silver/b3-instruments/*",
-              "gold/fii-master/*"
+              "gold/fii-master/*",
+              "control/gold-execution/*"
             ]
           }
         }
@@ -85,6 +86,19 @@ resource "aws_iam_policy" "lambda_execution" {
 
         Resource = (
           "${var.data_lake_bucket_arn}/gold/fii-master/*"
+        )
+      },
+      {
+        Sid    = "ReadWriteGoldExecutionState"
+        Effect = "Allow"
+
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+
+        Resource = (
+          "${var.data_lake_bucket_arn}/control/gold-execution/*"
         )
       },
       {
