@@ -59,6 +59,25 @@ variable "alarm_threshold" {
   }
 }
 
+variable "sns_topic_name" {
+  description = "SNS topic used to deliver Gold operational alerts."
+  type        = string
+}
+
+variable "alert_email" {
+  description = "Email address subscribed to Gold operational alerts."
+  type        = string
+
+  validation {
+    condition = (
+      length(trimspace(var.alert_email)) > 3
+      && can(regex("@", var.alert_email))
+    )
+
+    error_message = "alert_email must contain a valid email address."
+  }
+}
+
 variable "tags" {
   description = "Tags applied to supported Gold operational observability resources."
   type        = map(string)

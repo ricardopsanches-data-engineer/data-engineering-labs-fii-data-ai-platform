@@ -14,6 +14,21 @@ resource "aws_cloudwatch_log_metric_filter" "gold_operational_errors" {
   }
 }
 
+
+resource "aws_sns_topic" "gold_operational_alerts" {
+  name = var.sns_topic_name
+
+  tags = var.tags
+}
+
+
+resource "aws_sns_topic_subscription" "gold_operational_alert_email" {
+  topic_arn = aws_sns_topic.gold_operational_alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
+}
+
+
 resource "aws_cloudwatch_metric_alarm" "gold_operational_errors" {
   alarm_name        = var.alarm_name
   alarm_description = var.alarm_description
@@ -31,6 +46,14 @@ resource "aws_cloudwatch_metric_alarm" "gold_operational_errors" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
 
   treat_missing_data = "notBreaching"
+
+  alarm_actions = [
+    aws_sns_topic.gold_operational_alerts.arn
+  ]
+
+  ok_actions = [
+    aws_sns_topic.gold_operational_alerts.arn
+  ]
 
   tags = var.tags
 

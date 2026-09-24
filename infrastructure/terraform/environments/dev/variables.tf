@@ -9,6 +9,12 @@ variable "budget_notification_email" {
   type        = string
 }
 
+variable "gold_alert_email" {
+  description = "Email address that receives Gold operational alerts."
+  type        = string
+  sensitive   = true
+}
+
 variable "aws_region" {
   description = "AWS region used to deploy resources."
   type        = string

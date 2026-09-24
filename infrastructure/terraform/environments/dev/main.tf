@@ -361,6 +361,12 @@ module "gold_operational_observability" {
 
   alarm_threshold = 1
 
+  sns_topic_name = (
+    "fii-data-ai-platform-dev-gold-operational-alerts"
+  )
+
+  alert_email = var.gold_alert_email
+
   tags = {
     Project     = "fii-data-ai-platform"
     Environment = "dev"

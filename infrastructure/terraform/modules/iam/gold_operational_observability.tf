@@ -64,6 +64,7 @@ resource "aws_iam_policy" "gold_operational_observability_admin" {
           "sns:GetTopicAttributes",
           "sns:SetTopicAttributes",
           "sns:ListSubscriptionsByTopic",
+          "sns:ListTagsForResource",
           "sns:Subscribe",
           "sns:TagResource",
           "sns:UntagResource",
