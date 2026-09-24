@@ -332,6 +332,43 @@ module "lambda_fii_master_gold" {
   ]
 }
 
+module "gold_operational_observability" {
+  source = "../../modules/gold-operational-observability"
+
+  log_group_name = (
+    module.lambda_fii_master_gold.log_group_name
+  )
+
+  metric_namespace = (
+    "FiiDataAiPlatform/Gold"
+  )
+
+  operational_error_metric_name = (
+    "OperationalErrors"
+  )
+
+  alarm_name = (
+    "fii-data-ai-platform-dev-gold-operational-errors"
+  )
+
+  alarm_description = (
+    "Gold operational ERROR event detected in dev."
+  )
+
+  alarm_period_seconds = 300
+
+  alarm_evaluation_periods = 1
+
+  alarm_threshold = 1
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "GoldOperationalObservability"
+    ManagedBy   = "Terraform"
+  }
+}
+
 module "lambda_gold_readiness" {
   source = "../../modules/lambda-gold-readiness"
 

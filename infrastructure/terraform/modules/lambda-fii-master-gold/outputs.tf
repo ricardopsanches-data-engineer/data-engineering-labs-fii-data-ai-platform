@@ -14,3 +14,9 @@ output "execution_role_arn" {
   description = "FII Master Gold Lambda execution role ARN."
   value       = aws_iam_role.lambda_execution.arn
 }
+
+
+output "log_group_name" {
+  description = "CloudWatch Log Group name used by the FII Master Gold Lambda."
+  value       = aws_cloudwatch_log_group.lambda.name
+}
