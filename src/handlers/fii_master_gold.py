@@ -15,12 +15,19 @@ from src.orchestration.gold_execution_state import (
     mark_execution_started,
     mark_execution_succeeded,
 )
+
+from src.observability.gold_recovery_observability import (
+    emit_gold_execution_state_event,
+)
+
 from src.orchestration.gold_readiness import (
     PLATFORM_TIMEZONE,
+
 )
 from src.pipelines.fii_master_gold import (
     DEFAULT_MIN_RESOLUTION_RATE,
     run_pipeline,
+
 )
 from src.storage.s3 import upload_file
 
@@ -926,14 +933,31 @@ def lambda_handler(
         "status=STARTED"
     )
 
-    mark_execution_started(
-        bucket=bucket,
-        run_date=run_date,
-        trigger=trigger,
-        details=(
-            started_details
-        ),
+    started_state = (
+        mark_execution_started(
+            bucket=bucket,
+            run_date=run_date,
+            trigger=trigger,
+            details=(
+                started_details
+            ),
+        )
     )
+
+    try:
+        emit_gold_execution_state_event(
+            started_state
+        )
+
+    except Exception as observability_exc:
+        print(
+            "WARNING | Failed to emit "
+            "Gold STARTED observability | "
+            f"run_date={run_date} | "
+            f"error_type="
+            f"{type(observability_exc).__name__} | "
+            f"error={observability_exc}"
+        )
 
     try:
         explicit_inputs = (
@@ -969,19 +993,36 @@ def lambda_handler(
             ),
         }
 
-        mark_execution_succeeded(
-            bucket=bucket,
-            run_date=run_date,
-            trigger=trigger,
-            gold_key=(
-                result[
-                    "gold_key"
-                ]
-            ),
-            details=(
-                success_details
-            ),
+        succeeded_state = (
+            mark_execution_succeeded(
+                bucket=bucket,
+                run_date=run_date,
+                trigger=trigger,
+                gold_key=(
+                    result[
+                        "gold_key"
+                    ]
+                ),
+                details=(
+                    success_details
+                ),
+            )
         )
+
+        try:
+            emit_gold_execution_state_event(
+                succeeded_state
+            )
+
+        except Exception as observability_exc:
+            print(
+                "WARNING | Failed to emit "
+                "Gold SUCCEEDED observability | "
+                f"run_date={run_date} | "
+                f"error_type="
+                f"{type(observability_exc).__name__} | "
+                f"error={observability_exc}"
+            )
 
         print(
             "Gold execution state | "
@@ -1010,20 +1051,37 @@ def lambda_handler(
         }
 
         try:
-            mark_execution_failed(
-                bucket=bucket,
-                run_date=run_date,
-                trigger=trigger,
-                error_type=(
-                    type(exc).__name__
-                ),
-                error_message=(
-                    str(exc)
-                ),
-                details=(
-                    failure_details
-                ),
+            failed_state = (
+                mark_execution_failed(
+                    bucket=bucket,
+                    run_date=run_date,
+                    trigger=trigger,
+                    error_type=(
+                        type(exc).__name__
+                    ),
+                    error_message=(
+                        str(exc)
+                    ),
+                    details=(
+                        failure_details
+                    ),
+                )
             )
+
+            try:
+                emit_gold_execution_state_event(
+                    failed_state
+                )
+
+            except Exception as observability_exc:
+                print(
+                    "WARNING | Failed to emit "
+                    "Gold FAILED observability | "
+                    f"run_date={run_date} | "
+                    f"error_type="
+                    f"{type(observability_exc).__name__} | "
+                    f"error={observability_exc}"
+                )
 
         except Exception as state_exc:
             print(

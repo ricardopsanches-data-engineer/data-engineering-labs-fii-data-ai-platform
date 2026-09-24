@@ -477,6 +477,482 @@ def test_lambda_handler_state_failure_does_not_mask_original_error(
         )
 
 
+def test_lambda_handler_emits_started_and_succeeded_observability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "FII_DATA_LAKE_BUCKET",
+        BUCKET,
+    )
+
+    emitted_states: list[
+        dict
+    ] = []
+
+    explicit_inputs = {
+        "b3_trades": {
+            "reference_date": (
+                "2026-09-22"
+            ),
+        }
+    }
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "resolve_explicit_inputs",
+        lambda **kwargs: (
+            explicit_inputs
+        ),
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "mark_execution_started",
+        lambda **kwargs: {
+            "status": "STARTED",
+            "run_date": kwargs[
+                "run_date"
+            ],
+            "trigger": kwargs[
+                "trigger"
+            ],
+            "request_id": (
+                "request-observability"
+            ),
+        },
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "run_fii_master_gold",
+        lambda **kwargs: {
+            "status": "success",
+            "run_date": kwargs[
+                "run_date"
+            ],
+            "reference_date": (
+                "2026-09-22"
+            ),
+            "records": 388,
+            "gold_key": (
+                "gold/fii_master/"
+                "year=2026/month=09/"
+                "day=24/"
+                "fii_master.parquet"
+            ),
+        },
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "mark_execution_succeeded",
+        lambda **kwargs: {
+            "status": "SUCCEEDED",
+            "run_date": kwargs[
+                "run_date"
+            ],
+            "trigger": kwargs[
+                "trigger"
+            ],
+            "request_id": (
+                "request-observability"
+            ),
+            "gold_key": kwargs[
+                "gold_key"
+            ],
+            "reference_date": (
+                "2026-09-22"
+            ),
+            "records": 388,
+        },
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "mark_execution_failed",
+        lambda **kwargs: pytest.fail(
+            "FAILED state should not "
+            "be written."
+        ),
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "emit_gold_execution_state_event",
+        lambda state: (
+            emitted_states.append(
+                state
+            )
+        ),
+    )
+
+    context = SimpleNamespace(
+        aws_request_id=(
+            "request-observability"
+        )
+    )
+
+    result = (
+        fii_master_gold
+        .lambda_handler(
+            {
+                "run_date": RUN_DATE,
+                "trigger": "RECOVERY",
+            },
+            context,
+        )
+    )
+
+    assert result[
+        "status"
+    ] == "success"
+
+    assert [
+        state[
+            "status"
+        ]
+        for state
+        in emitted_states
+    ] == [
+        "STARTED",
+        "SUCCEEDED",
+    ]
+
+    assert all(
+        state[
+            "run_date"
+        ] == RUN_DATE
+        for state
+        in emitted_states
+    )
+
+    assert all(
+        state[
+            "trigger"
+        ] == "RECOVERY"
+        for state
+        in emitted_states
+    )
+
+
+def test_lambda_handler_emits_started_and_failed_observability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "FII_DATA_LAKE_BUCKET",
+        BUCKET,
+    )
+
+    emitted_states: list[
+        dict
+    ] = []
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "mark_execution_started",
+        lambda **kwargs: {
+            "status": "STARTED",
+            "run_date": kwargs[
+                "run_date"
+            ],
+            "trigger": kwargs[
+                "trigger"
+            ],
+        },
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "resolve_explicit_inputs",
+        lambda **kwargs: (
+            (_ for _ in ())
+            .throw(
+                ValueError(
+                    "bad explicit input"
+                )
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "mark_execution_failed",
+        lambda **kwargs: {
+            "status": "FAILED",
+            "run_date": kwargs[
+                "run_date"
+            ],
+            "trigger": kwargs[
+                "trigger"
+            ],
+            "error_type": kwargs[
+                "error_type"
+            ],
+            "error_message": kwargs[
+                "error_message"
+            ],
+        },
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "emit_gold_execution_state_event",
+        lambda state: (
+            emitted_states.append(
+                state
+            )
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="bad explicit input",
+    ):
+        (
+            fii_master_gold
+            .lambda_handler(
+                {
+                    "run_date": RUN_DATE,
+                    "trigger": "RECOVERY",
+                },
+                None,
+            )
+        )
+
+    assert [
+        state[
+            "status"
+        ]
+        for state
+        in emitted_states
+    ] == [
+        "STARTED",
+        "FAILED",
+    ]
+
+    failed_state = (
+        emitted_states[
+            1
+        ]
+    )
+
+    assert failed_state[
+        "error_type"
+    ] == "ValueError"
+
+    assert failed_state[
+        "error_message"
+    ] == "bad explicit input"
+
+
+def test_lambda_handler_observability_failure_does_not_break_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "FII_DATA_LAKE_BUCKET",
+        BUCKET,
+    )
+
+    emission_attempts: list[
+        str
+    ] = []
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "mark_execution_started",
+        lambda **kwargs: {
+            "status": "STARTED",
+            "run_date": kwargs[
+                "run_date"
+            ],
+            "trigger": kwargs[
+                "trigger"
+            ],
+        },
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "resolve_explicit_inputs",
+        lambda **kwargs: {},
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "run_fii_master_gold",
+        lambda **kwargs: {
+            "status": "success",
+            "run_date": kwargs[
+                "run_date"
+            ],
+            "reference_date": (
+                "2026-09-22"
+            ),
+            "records": 388,
+            "gold_key": (
+                "gold/fii_master/"
+                "year=2026/month=09/"
+                "day=24/"
+                "fii_master.parquet"
+            ),
+        },
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "mark_execution_succeeded",
+        lambda **kwargs: {
+            "status": "SUCCEEDED",
+            "run_date": kwargs[
+                "run_date"
+            ],
+            "trigger": kwargs[
+                "trigger"
+            ],
+            "gold_key": kwargs[
+                "gold_key"
+            ],
+        },
+    )
+
+    def fail_observability(
+        state: dict,
+    ) -> None:
+        emission_attempts.append(
+            state[
+                "status"
+            ]
+        )
+
+        raise RuntimeError(
+            "observability unavailable"
+        )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "emit_gold_execution_state_event",
+        fail_observability,
+    )
+
+    result = (
+        fii_master_gold
+        .lambda_handler(
+            {
+                "run_date": RUN_DATE,
+            },
+            None,
+        )
+    )
+
+    assert result[
+        "status"
+    ] == "success"
+
+    assert emission_attempts == [
+        "STARTED",
+        "SUCCEEDED",
+    ]
+
+
+def test_lambda_handler_observability_failure_does_not_mask_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "FII_DATA_LAKE_BUCKET",
+        BUCKET,
+    )
+
+    emission_attempts: list[
+        str
+    ] = []
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "mark_execution_started",
+        lambda **kwargs: {
+            "status": "STARTED",
+            "run_date": kwargs[
+                "run_date"
+            ],
+            "trigger": kwargs[
+                "trigger"
+            ],
+        },
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "resolve_explicit_inputs",
+        lambda **kwargs: (
+            (_ for _ in ())
+            .throw(
+                ValueError(
+                    "original Gold failure"
+                )
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "mark_execution_failed",
+        lambda **kwargs: {
+            "status": "FAILED",
+            "run_date": kwargs[
+                "run_date"
+            ],
+            "trigger": kwargs[
+                "trigger"
+            ],
+            "error_type": kwargs[
+                "error_type"
+            ],
+            "error_message": kwargs[
+                "error_message"
+            ],
+        },
+    )
+
+    def fail_observability(
+        state: dict,
+    ) -> None:
+        emission_attempts.append(
+            state[
+                "status"
+            ]
+        )
+
+        raise RuntimeError(
+            "observability unavailable"
+        )
+
+    monkeypatch.setattr(
+        fii_master_gold,
+        "emit_gold_execution_state_event",
+        fail_observability,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="original Gold failure",
+    ):
+        (
+            fii_master_gold
+            .lambda_handler(
+                {
+                    "run_date": RUN_DATE,
+                },
+                None,
+            )
+        )
+
+    assert emission_attempts == [
+        "STARTED",
+        "FAILED",
+    ]
+
+
+
 def test_lambda_handler_requires_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
