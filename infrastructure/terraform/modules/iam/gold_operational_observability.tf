@@ -53,6 +53,49 @@ resource "aws_iam_policy" "gold_operational_observability_admin" {
         ]
 
         Resource = "*"
+      },
+      {
+        Sid    = "GoldSnsTopicManagement"
+        Effect = "Allow"
+
+        Action = [
+          "sns:CreateTopic",
+          "sns:DeleteTopic",
+          "sns:GetTopicAttributes",
+          "sns:SetTopicAttributes",
+          "sns:ListSubscriptionsByTopic",
+          "sns:Subscribe",
+          "sns:TagResource",
+          "sns:UntagResource",
+          "sns:Publish"
+        ]
+
+        Resource = [
+          "arn:aws:sns:sa-east-1:625685670804:fii-data-ai-platform-dev-gold-operational-alerts"
+        ]
+      },
+      {
+        Sid    = "GoldSnsSubscriptionManagement"
+        Effect = "Allow"
+
+        Action = [
+          "sns:GetSubscriptionAttributes",
+          "sns:SetSubscriptionAttributes",
+          "sns:Unsubscribe"
+        ]
+
+        Resource = "*"
+      },
+      {
+        Sid    = "GoldSnsRead"
+        Effect = "Allow"
+
+        Action = [
+          "sns:ListTopics",
+          "sns:ListSubscriptions"
+        ]
+
+        Resource = "*"
       }
     ]
   })
