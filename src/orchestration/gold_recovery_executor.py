@@ -6,6 +6,12 @@ from typing import Any
 
 import boto3
 
+from src.observability.gold_recovery_observability import (
+    emit_assessment_event,
+    emit_execution_result_event,
+    emit_missing_cycle_event,
+    emit_recovery_summary_event,
+)
 
 SUPPORTED_ACTIONS = {
     "NO_ACTION",
@@ -608,6 +614,35 @@ def execute_recovery_plan(
     ] = []
 
     for assessment in assessments:
+        action = assessment.get(
+            "action"
+        )
+
+        if (
+            action
+            == "INVESTIGATE_MISSING_CYCLE"
+        ):
+            emit_missing_cycle_event(
+                run_date=str(
+                    assessment.get(
+                        "run_date",
+                        "UNKNOWN",
+                    )
+                ),
+                reason=str(
+                    assessment.get(
+                        "reason"
+                    )
+                    or
+                    "EXPECTED_CYCLE_NOT_OBSERVED"
+                ),
+            )
+
+        else:
+            emit_assessment_event(
+                assessment
+            )
+
         result = (
             execute_assessment(
                 assessment=assessment,
@@ -622,6 +657,10 @@ def execute_recovery_plan(
         )
 
         results.append(
+            result
+        )
+
+        emit_execution_result_event(
             result
         )
 
@@ -670,7 +709,7 @@ def execute_recovery_plan(
     else:
         overall_status = "EXECUTED"
 
-    return {
+    execution_result = {
         "status": (
             overall_status
         ),
@@ -691,3 +730,9 @@ def execute_recovery_plan(
         ),
         "results": results,
     }
+
+    emit_recovery_summary_event(
+        execution_result
+    )
+
+    return execution_result

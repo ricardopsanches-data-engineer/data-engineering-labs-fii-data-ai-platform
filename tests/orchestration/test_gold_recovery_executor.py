@@ -1072,3 +1072,177 @@ def test_execute_recovery_plan_requires_assessments() -> None:
                 bucket=BUCKET,
             )
         )
+
+
+def test_execute_recovery_plan_emits_observability_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted_assessments: list[
+        dict
+    ] = []
+
+    emitted_results: list[
+        dict
+    ] = []
+
+    emitted_summaries: list[
+        dict
+    ] = []
+
+    monkeypatch.setattr(
+        gold_recovery_executor,
+        "emit_assessment_event",
+        lambda assessment: (
+            emitted_assessments.append(
+                assessment
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        gold_recovery_executor,
+        "emit_execution_result_event",
+        lambda result: (
+            emitted_results.append(
+                result
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        gold_recovery_executor,
+        "emit_recovery_summary_event",
+        lambda result: (
+            emitted_summaries.append(
+                result
+            )
+        ),
+    )
+
+    assessment = {
+        "status": "COMPLETE",
+        "action": "NO_ACTION",
+        "run_date": "2026-09-24",
+        "reason": "GOLD_OBJECT_EXISTS",
+    }
+
+    result = (
+        gold_recovery_executor
+        .execute_recovery_plan(
+            recovery_plan={
+                "assessments": [
+                    assessment
+                ]
+            },
+            gold_function_name=(
+                GOLD_FUNCTION_NAME
+            ),
+            raw_to_silver_functions=(
+                RAW_TO_SILVER_FUNCTIONS
+            ),
+            bucket=BUCKET,
+        )
+    )
+
+    assert emitted_assessments == [
+        assessment
+    ]
+
+    assert len(
+        emitted_results
+    ) == 1
+
+    assert emitted_results[
+        0
+    ][
+        "status"
+    ] == "SKIPPED"
+
+    assert emitted_summaries == [
+        result
+    ]
+
+
+def test_execute_recovery_plan_emits_missing_cycle_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing_cycles: list[
+        dict
+    ] = []
+
+    assessment_events: list[
+        dict
+    ] = []
+
+    monkeypatch.setattr(
+        gold_recovery_executor,
+        "emit_missing_cycle_event",
+        lambda **kwargs: (
+            missing_cycles.append(
+                kwargs
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        gold_recovery_executor,
+        "emit_assessment_event",
+        lambda assessment: (
+            assessment_events.append(
+                assessment
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        gold_recovery_executor,
+        "emit_execution_result_event",
+        lambda result: None,
+    )
+
+    monkeypatch.setattr(
+        gold_recovery_executor,
+        "emit_recovery_summary_event",
+        lambda result: None,
+    )
+
+    gold_recovery_executor.execute_recovery_plan(
+        recovery_plan={
+            "assessments": [
+                {
+                    "status": (
+                        "MISSING_CYCLE"
+                    ),
+                    "action": (
+                        "INVESTIGATE_MISSING_CYCLE"
+                    ),
+                    "run_date": (
+                        "2026-09-23"
+                    ),
+                    "reason": (
+                        "EXPECTED_CYCLE_NOT_OBSERVED"
+                    ),
+                }
+            ]
+        },
+        gold_function_name=(
+            GOLD_FUNCTION_NAME
+        ),
+        raw_to_silver_functions=(
+            RAW_TO_SILVER_FUNCTIONS
+        ),
+        bucket=BUCKET,
+    )
+
+    assert missing_cycles == [
+        {
+            "run_date": (
+                "2026-09-23"
+            ),
+            "reason": (
+                "EXPECTED_CYCLE_NOT_OBSERVED"
+            ),
+        }
+    ]
+
+    assert assessment_events == []
