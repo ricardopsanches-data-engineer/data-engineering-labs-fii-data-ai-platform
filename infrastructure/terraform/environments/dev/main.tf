@@ -367,6 +367,10 @@ module "gold_operational_observability" {
     Component   = "GoldOperationalObservability"
     ManagedBy   = "Terraform"
   }
+
+  depends_on = [
+    module.iam
+  ]
 }
 
 module "lambda_gold_readiness" {
