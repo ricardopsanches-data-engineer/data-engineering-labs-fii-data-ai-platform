@@ -9,6 +9,7 @@ import boto3
 
 SUPPORTED_ACTIONS = {
     "NO_ACTION",
+    "WAIT_FOR_COMPLETION",
     "RETRY_GOLD",
     "REBUILD_SILVER_FROM_RAW",
     "ALERT_AND_INVESTIGATE",
@@ -24,12 +25,11 @@ def invoke_lambda_async(
     """
     Invoca uma Lambda de forma assíncrona.
 
-    Retorna somente confirmação de aceite
-    pela API do Lambda.
+    StatusCode=202 significa somente que
+    o evento foi aceito pela API Lambda.
 
-    Importante:
-    StatusCode=202 NÃO significa que a
-    execução terminou com sucesso.
+    O sucesso real da execução é controlado
+    pelo Gold execution state.
     """
 
     lambda_client = boto3.client(
@@ -71,50 +71,22 @@ def invoke_lambda_async(
     }
 
 
-def execute_gold_retry(
+def build_gold_recovery_payload(
     *,
     assessment: dict[str, Any],
-    gold_function_name: str,
 ) -> dict[str, Any]:
     """
-    Executa recovery de Gold diretamente.
+    Constrói o payload explícito usado
+    pelo retry da Gold.
 
-    Não passa pelo Gold Readiness Coordinator.
+    O payload físico produzido pelo
+    recovery plan é preservado, mas o
+    trigger RECOVERY é acrescentado.
 
-    Isso é intencional:
-    um dispatch lock antigo pode existir
-    mesmo quando a execução assíncrona da
-    Gold falhou depois do HTTP 202.
-
-    O recovery usa o payload Gold explícito
-    produzido pelo diagnóstico físico.
+    Assim o handler Gold consegue
+    distinguir execução normal de
+    recuperação operacional.
     """
-
-    status = assessment.get(
-        "status"
-    )
-
-    action = assessment.get(
-        "action"
-    )
-
-    if (
-        status
-        != "GOLD_RETRY_REQUIRED"
-    ):
-        raise ValueError(
-            "Gold retry requires "
-            "status="
-            "GOLD_RETRY_REQUIRED | "
-            f"received={status}"
-        )
-
-    if action != "RETRY_GOLD":
-        raise ValueError(
-            "Gold retry requires "
-            "action=RETRY_GOLD | "
-            f"received={action}"
-        )
 
     gold_payload = assessment.get(
         "gold_payload"
@@ -151,12 +123,69 @@ def execute_gold_retry(
             f"payload={payload_run_date}"
         )
 
+    return {
+        **gold_payload,
+        "trigger": "RECOVERY",
+    }
+
+
+def execute_gold_retry(
+    *,
+    assessment: dict[str, Any],
+    gold_function_name: str,
+) -> dict[str, Any]:
+    """
+    Executa recovery direto da Gold.
+
+    Não passa pelo Gold Readiness
+    Coordinator.
+
+    Isso é intencional porque um dispatch
+    lock antigo pode existir mesmo quando
+    a execução Gold falhou após o aceite
+    assíncrono HTTP 202.
+    """
+
+    status = assessment.get(
+        "status"
+    )
+
+    action = assessment.get(
+        "action"
+    )
+
+    if (
+        status
+        != "GOLD_RETRY_REQUIRED"
+    ):
+        raise ValueError(
+            "Gold retry requires "
+            "status="
+            "GOLD_RETRY_REQUIRED | "
+            f"received={status}"
+        )
+
+    if action != "RETRY_GOLD":
+        raise ValueError(
+            "Gold retry requires "
+            "action=RETRY_GOLD | "
+            f"received={action}"
+        )
+
+    recovery_payload = (
+        build_gold_recovery_payload(
+            assessment=assessment
+        )
+    )
+
     invocation = (
         invoke_lambda_async(
             function_name=(
                 gold_function_name
             ),
-            payload=gold_payload,
+            payload=(
+                recovery_payload
+            ),
         )
     )
 
@@ -165,7 +194,11 @@ def execute_gold_retry(
             "DISPATCHED"
         ),
         "action": "RETRY_GOLD",
-        "run_date": run_date,
+        "run_date": (
+            assessment.get(
+                "run_date"
+            )
+        ),
         "function_name": (
             gold_function_name
         ),
@@ -175,7 +208,7 @@ def execute_gold_retry(
             ]
         ),
         "payload": (
-            gold_payload
+            recovery_payload
         ),
     }
 
@@ -186,19 +219,15 @@ def build_raw_to_silver_payload(
     source: str,
 ) -> dict[str, str]:
     """
-    Constrói o payload direto para uma
+    Constrói payload direto para a
     Lambda RAW->Silver existente.
 
-    Cada handler atual aceita:
+    Contrato esperado pelo handler:
 
     {
         "bucket": "...",
         "key": "raw/..."
     }
-
-    O bucket precisa estar presente no
-    assessment durante a execução do
-    plano ou ser injetado externamente.
     """
 
     source_states = assessment.get(
@@ -288,16 +317,15 @@ def execute_raw_rebuild(
     ),
 ) -> dict[str, Any]:
     """
-    Dispara as Lambdas RAW->Silver já
-    existentes para as fontes que precisam
-    reconstrução.
+    Dispara as Lambdas RAW->Silver
+    existentes para as fontes que
+    precisam ser reconstruídas.
 
-    Não executa transformação diretamente.
+    O executor não duplica transformação.
 
-    O fluxo normal permanece responsável
-    por:
-    RAW -> Silver -> readiness marker
-    -> coordinator -> Gold.
+    RAW->Silver existente continua
+    responsável por reconstruir Silver
+    e emitir readiness marker.
     """
 
     status = assessment.get(
@@ -419,26 +447,29 @@ def execute_assessment(
     bucket: str,
 ) -> dict[str, Any]:
     """
-    Executa uma única entrada do
-    recovery plan.
+    Executa uma entrada do recovery plan.
 
-    Somente ações explicitamente seguras
-    são executadas automaticamente.
+    Ações:
 
     NO_ACTION
-        Não faz nada.
+        Nada precisa ser executado.
+
+    WAIT_FOR_COMPLETION
+        Existe execução Gold ativa.
+        Nenhuma nova Lambda é disparada.
 
     RETRY_GOLD
-        Invoca Gold diretamente.
+        Invoca Gold diretamente com
+        trigger RECOVERY.
 
     REBUILD_SILVER_FROM_RAW
         Invoca RAW->Silver existente.
 
     ALERT_AND_INVESTIGATE
     INVESTIGATE_MISSING_CYCLE
-        Não tentam fabricar recuperação.
-        Retornam estado bloqueado para
-        observabilidade/alerta.
+        Não fabricam dados.
+        Permanecem bloqueadas para
+        observabilidade e investigação.
     """
 
     action = assessment.get(
@@ -467,6 +498,27 @@ def execute_assessment(
             ),
             "reason": (
                 "NO_ACTION_REQUIRED"
+            ),
+        }
+
+    if (
+        action
+        == "WAIT_FOR_COMPLETION"
+    ):
+        return {
+            "status": "WAITING",
+            "action": action,
+            "run_date": (
+                assessment.get(
+                    "run_date"
+                )
+            ),
+            "reason": (
+                assessment.get(
+                    "reason"
+                )
+                or
+                "GOLD_EXECUTION_IN_PROGRESS"
             ),
         }
 
@@ -505,7 +557,8 @@ def execute_assessment(
             assessment.get(
                 "reason"
             )
-            or "MANUAL_INVESTIGATION_REQUIRED"
+            or
+            "MANUAL_INVESTIGATION_REQUIRED"
         ),
     }
 
@@ -521,20 +574,18 @@ def execute_recovery_plan(
 ) -> dict[str, Any]:
     """
     Executa um recovery plan já produzido
-    por gold_recovery.build_recovery_plan().
+    pelo gold_recovery.
 
-    Esta função NÃO descobre dados e NÃO
-    recalcula o plano.
+    Esta função NÃO redescobre dados e
+    NÃO recalcula decisões.
 
-    Ela executa exatamente o snapshot do
-    plano recebido.
-
-    Isso mantém separadas as fases:
+    Fases permanecem separadas:
 
         discover
         assess
         plan
         execute
+        observe
     """
 
     assessments = (
@@ -582,6 +633,14 @@ def execute_recovery_plan(
         ] == "DISPATCHED"
     ]
 
+    waiting = [
+        result
+        for result in results
+        if result[
+            "status"
+        ] == "WAITING"
+    ]
+
     blocked = [
         result
         for result in results
@@ -598,17 +657,31 @@ def execute_recovery_plan(
         ] == "SKIPPED"
     ]
 
+    if blocked:
+        overall_status = (
+            "EXECUTED_WITH_BLOCKS"
+        )
+
+    elif waiting:
+        overall_status = (
+            "EXECUTED_WITH_WAITING"
+        )
+
+    else:
+        overall_status = "EXECUTED"
+
     return {
         "status": (
-            "EXECUTED_WITH_BLOCKS"
-            if blocked
-            else "EXECUTED"
+            overall_status
         ),
         "total_results": len(
             results
         ),
         "dispatched": len(
             dispatched
+        ),
+        "waiting": len(
+            waiting
         ),
         "blocked": len(
             blocked

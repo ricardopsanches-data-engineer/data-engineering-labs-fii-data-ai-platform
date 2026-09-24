@@ -310,9 +310,12 @@ def test_execute_gold_retry(
 
     assert result[
         "payload"
-    ] == assessment[
-        "gold_payload"
-    ]
+    ] == {
+        **assessment[
+            "gold_payload"
+        ],
+        "trigger": "RECOVERY",
+    }
 
 
 def test_execute_gold_retry_requires_correct_status() -> None:
@@ -340,6 +343,27 @@ def test_execute_gold_retry_requires_correct_status() -> None:
                 ),
             )
         )
+
+
+def test_build_gold_recovery_payload_adds_recovery_trigger() -> None:
+    assessment = (
+        build_gold_retry_assessment()
+    )
+
+    result = (
+        gold_recovery_executor
+        .build_gold_recovery_payload(
+            assessment=assessment
+        )
+    )
+
+    assert result == {
+        **assessment[
+            "gold_payload"
+        ],
+        "trigger": "RECOVERY",
+    }
+
 
 
 def test_execute_gold_retry_requires_correct_action() -> None:
@@ -652,6 +676,45 @@ def test_execute_assessment_skips_no_action() -> None:
     }
 
 
+def test_execute_assessment_waits_for_completion() -> None:
+    result = (
+        gold_recovery_executor
+        .execute_assessment(
+            assessment={
+                "status": "IN_PROGRESS",
+                "action": (
+                    "WAIT_FOR_COMPLETION"
+                ),
+                "run_date": (
+                    "2026-09-22"
+                ),
+                "reason": (
+                    "STARTED_EXECUTION_ACTIVE"
+                ),
+            },
+            gold_function_name=(
+                GOLD_FUNCTION_NAME
+            ),
+            raw_to_silver_functions=(
+                RAW_TO_SILVER_FUNCTIONS
+            ),
+            bucket=BUCKET,
+        )
+    )
+
+    assert result == {
+        "status": "WAITING",
+        "action": (
+            "WAIT_FOR_COMPLETION"
+        ),
+        "run_date": "2026-09-22",
+        "reason": (
+            "STARTED_EXECUTION_ACTIVE"
+        ),
+    }
+
+
+
 def test_execute_assessment_blocks_manual_investigation() -> None:
     result = (
         gold_recovery_executor
@@ -897,6 +960,40 @@ def test_execute_recovery_plan_without_blocks(
         ),
     )
 
+
+def test_execute_recovery_plan_with_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recovery_plan = {
+        "assessments": [
+            {
+                "status": (
+                    "IN_PROGRESS"
+                ),
+                "action": (
+                    "WAIT_FOR_COMPLETION"
+                ),
+                "run_date": (
+                    "2026-09-22"
+                ),
+            }
+        ]
+    }
+
+    monkeypatch.setattr(
+        gold_recovery_executor,
+        "execute_assessment",
+        lambda **kwargs: {
+            "status": "WAITING",
+            "action": (
+                "WAIT_FOR_COMPLETION"
+            ),
+            "run_date": (
+                "2026-09-22"
+            ),
+        },
+    )
+
     result = (
         gold_recovery_executor
         .execute_recovery_plan(
@@ -915,10 +1012,20 @@ def test_execute_recovery_plan_without_blocks(
 
     assert result[
         "status"
-    ] == "EXECUTED"
+    ] == (
+        "EXECUTED_WITH_WAITING"
+    )
+
+    assert result[
+        "total_results"
+    ] == 1
 
     assert result[
         "dispatched"
+    ] == 0
+
+    assert result[
+        "waiting"
     ] == 1
 
     assert result[
@@ -927,7 +1034,21 @@ def test_execute_recovery_plan_without_blocks(
 
     assert result[
         "skipped"
-    ] == 1
+    ] == 0
+
+    assert result[
+        "results"
+    ] == [
+        {
+            "status": "WAITING",
+            "action": (
+                "WAIT_FOR_COMPLETION"
+            ),
+            "run_date": (
+                "2026-09-22"
+            ),
+        }
+    ]
 
 
 def test_execute_recovery_plan_requires_assessments() -> None:
