@@ -309,7 +309,7 @@ module "lambda_fii_master_gold" {
   function_name = "fii-data-ai-platform-dev-fii-master-gold"
 
   image_uri = (
-    "${module.ecr_fii_master_gold.repository_url}:v0.1.3"
+    "${module.ecr_fii_master_gold.repository_url}:v0.1.4"
   )
 
   data_lake_bucket_name = module.s3_data_lake.bucket_name
