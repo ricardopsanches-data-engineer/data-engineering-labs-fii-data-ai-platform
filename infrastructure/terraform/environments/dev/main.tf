@@ -475,16 +475,6 @@ module "lambda_gold_recovery_supervisor" {
 
   lookback_days = 30
 
-  expected_weekdays = [
-    0,
-    1,
-    2,
-    3,
-    4,
-  ]
-
-  excluded_dates = []
-
   timeout     = 60
   memory_size = 128
 

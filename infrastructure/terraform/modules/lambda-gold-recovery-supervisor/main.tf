@@ -171,23 +171,6 @@ resource "aws_lambda_function" "gold_recovery_supervisor" {
           var.lookback_days
         )
       )
-
-      FII_GOLD_RECOVERY_EXPECTED_WEEKDAYS = (
-        join(
-          ",",
-          [
-            for weekday in var.expected_weekdays :
-            tostring(weekday)
-          ]
-        )
-      )
-
-      FII_GOLD_RECOVERY_EXCLUDED_DATES = (
-        join(
-          ",",
-          var.excluded_dates
-        )
-      )
     }
   }
 

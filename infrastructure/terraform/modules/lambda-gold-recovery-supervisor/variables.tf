@@ -66,34 +66,6 @@ variable "lookback_days" {
   }
 }
 
-variable "expected_weekdays" {
-  description = "Expected operational weekdays using Python weekday numbering, where Monday is 0 and Sunday is 6."
-  type        = list(number)
-
-  default = [
-    0,
-    1,
-    2,
-    3,
-    4,
-  ]
-
-  validation {
-    condition = alltrue([
-      for weekday in var.expected_weekdays :
-      weekday >= 0 && weekday <= 6
-    ])
-
-    error_message = "expected_weekdays values must be between 0 and 6."
-  }
-}
-
-variable "excluded_dates" {
-  description = "Explicit ISO dates excluded from expected recovery cycles."
-  type        = list(string)
-  default     = []
-}
-
 variable "timeout" {
   description = "Maximum Lambda execution time in seconds."
   type        = number
