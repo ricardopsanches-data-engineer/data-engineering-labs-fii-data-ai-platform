@@ -7,7 +7,7 @@ resource "aws_iam_policy" "lambda_gold_readiness_admin" {
 
     Statement = [
       {
-        Sid    = "GoldReadinessExecutionRoleRead"
+        Sid    = "GoldOrchestrationExecutionRoleRead"
         Effect = "Allow"
 
         Action = [
@@ -19,11 +19,12 @@ resource "aws_iam_policy" "lambda_gold_readiness_admin" {
         ]
 
         Resource = [
-          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-gold-readiness-execution-role"
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-gold-readiness-execution-role",
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-gold-recovery-supervisor-execution-role"
         ]
       },
       {
-        Sid    = "GoldReadinessExecutionRoleManagement"
+        Sid    = "GoldOrchestrationExecutionRoleManagement"
         Effect = "Allow"
 
         Action = [
@@ -37,11 +38,12 @@ resource "aws_iam_policy" "lambda_gold_readiness_admin" {
         ]
 
         Resource = [
-          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-gold-readiness-execution-role"
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-gold-readiness-execution-role",
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-gold-recovery-supervisor-execution-role"
         ]
       },
       {
-        Sid    = "GoldReadinessPassExecutionRole"
+        Sid    = "GoldOrchestrationPassExecutionRole"
         Effect = "Allow"
 
         Action = [
@@ -49,7 +51,8 @@ resource "aws_iam_policy" "lambda_gold_readiness_admin" {
         ]
 
         Resource = [
-          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-gold-readiness-execution-role"
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-gold-readiness-execution-role",
+          "arn:aws:iam::625685670804:role/fii-data-ai-platform-dev-gold-recovery-supervisor-execution-role"
         ]
 
         Condition = {
@@ -59,7 +62,7 @@ resource "aws_iam_policy" "lambda_gold_readiness_admin" {
         }
       },
       {
-        Sid    = "GoldReadinessLambdaManagement"
+        Sid    = "GoldOrchestrationLambdaManagement"
         Effect = "Allow"
 
         Action = [
@@ -83,11 +86,12 @@ resource "aws_iam_policy" "lambda_gold_readiness_admin" {
         ]
 
         Resource = [
-          "arn:aws:lambda:sa-east-1:625685670804:function:fii-data-ai-platform-dev-gold-readiness"
+          "arn:aws:lambda:sa-east-1:625685670804:function:fii-data-ai-platform-dev-gold-readiness",
+          "arn:aws:lambda:sa-east-1:625685670804:function:fii-data-ai-platform-dev-gold-recovery-supervisor"
         ]
       },
       {
-        Sid    = "GoldReadinessLogGroupManagement"
+        Sid    = "GoldOrchestrationLogGroupManagement"
         Effect = "Allow"
 
         Action = [
@@ -101,7 +105,8 @@ resource "aws_iam_policy" "lambda_gold_readiness_admin" {
         ]
 
         Resource = [
-          "arn:aws:logs:sa-east-1:625685670804:log-group:/aws/lambda/fii-data-ai-platform-dev-gold-readiness*"
+          "arn:aws:logs:sa-east-1:625685670804:log-group:/aws/lambda/fii-data-ai-platform-dev-gold-readiness*",
+          "arn:aws:logs:sa-east-1:625685670804:log-group:/aws/lambda/fii-data-ai-platform-dev-gold-recovery-supervisor*"
         ]
       }
     ]

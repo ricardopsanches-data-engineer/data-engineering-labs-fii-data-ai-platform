@@ -417,3 +417,83 @@ module "lambda_gold_readiness" {
     module.lambda_fii_master_gold
   ]
 }
+
+module "lambda_gold_recovery_supervisor" {
+  source = "../../modules/lambda-gold-recovery-supervisor"
+
+  function_name = "fii-data-ai-platform-dev-gold-recovery-supervisor"
+
+  filename = "../../../../lambda/gold-recovery-supervisor/build/gold_recovery_supervisor.zip"
+
+  source_code_hash = filebase64sha256(
+    "../../../../lambda/gold-recovery-supervisor/build/gold_recovery_supervisor.zip"
+  )
+
+  data_lake_bucket_name = (
+    module.s3_data_lake.bucket_name
+  )
+
+  data_lake_bucket_arn = (
+    module.s3_data_lake.bucket_arn
+  )
+
+  gold_lambda_function_name = (
+    module.lambda_fii_master_gold.function_name
+  )
+
+  gold_lambda_function_arn = (
+    module.lambda_fii_master_gold.function_arn
+  )
+
+  raw_to_silver_function_names = {
+    b3 = (
+      module.lambda_b3_silver.function_name
+    )
+
+    cvm = (
+      module.lambda_cvm_silver.function_name
+    )
+
+    b3_instruments = (
+      module.lambda_b3_instruments_silver.function_name
+    )
+  }
+
+  raw_to_silver_function_arns = {
+    b3 = (
+      module.lambda_b3_silver.function_arn
+    )
+
+    cvm = (
+      module.lambda_cvm_silver.function_arn
+    )
+
+    b3_instruments = (
+      module.lambda_b3_instruments_silver.function_arn
+    )
+  }
+
+  lookback_days = 30
+
+  expected_weekdays = [
+    0,
+    1,
+    2,
+    3,
+    4,
+  ]
+
+  excluded_dates = []
+
+  timeout     = 60
+  memory_size = 128
+
+  log_retention_days = 14
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "GoldRecoverySupervisor"
+    ManagedBy   = "Terraform"
+  }
+}
