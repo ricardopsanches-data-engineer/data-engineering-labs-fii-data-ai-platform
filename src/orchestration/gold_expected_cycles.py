@@ -3,6 +3,10 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Iterable
 
+from src.orchestration.b3_trading_calendar import (
+    generate_trading_days,
+)
+
 
 DEFAULT_EXPECTED_WEEKDAYS = frozenset(
     {
@@ -21,14 +25,11 @@ def normalize_excluded_dates(
     ),
 ) -> set[date]:
     """
-    Normaliza datas explicitamente excluídas
-    do calendário operacional.
+    Normaliza exclusões explícitas.
 
-    Exemplos:
-    - feriados;
-    - paralisações planejadas;
-    - datas em que a plataforma não deveria
-      executar por decisão operacional.
+    Esta função permanece temporariamente
+    para compatibilidade durante a migração
+    do recovery para o calendário oficial B3.
     """
 
     if excluded_dates is None:
@@ -39,46 +40,27 @@ def normalize_excluded_dates(
     )
 
 
-def generate_expected_run_dates(
+def generate_legacy_expected_run_dates(
     *,
     start_date: date,
     end_date: date,
-    expected_weekdays: (
-        Iterable[int]
-        | None
-    ) = None,
+    expected_weekdays: Iterable[int],
     excluded_dates: (
-        Iterable[date]
-        | None
+        Iterable[date] | None
     ) = None,
 ) -> list[date]:
     """
-    Gera as datas em que a plataforma
-    deveria ter executado.
+    Implementação legada de calendário.
 
-    Não consulta AWS e não infere existência
-    de dados.
+    Mantida temporariamente somente para
+    compatibilidade durante a migração.
 
-    O calendário é determinado por:
-    - intervalo solicitado;
-    - weekdays esperados;
-    - exclusões explícitas.
+    Novos consumidores NÃO devem utilizar
+    esta função.
     """
 
-    if start_date > end_date:
-        raise ValueError(
-            "start_date must be "
-            "<= end_date."
-        )
-
-    weekdays = (
-        set(
-            DEFAULT_EXPECTED_WEEKDAYS
-        )
-        if expected_weekdays is None
-        else set(
-            expected_weekdays
-        )
+    weekdays = set(
+        expected_weekdays
     )
 
     invalid_weekdays = {
@@ -104,14 +86,9 @@ def generate_expected_run_dates(
         date
     ] = []
 
-    current_date = (
-        start_date
-    )
+    current_date = start_date
 
-    while (
-        current_date
-        <= end_date
-    ):
+    while current_date <= end_date:
         if (
             current_date.weekday()
             in weekdays
@@ -122,13 +99,76 @@ def generate_expected_run_dates(
                 current_date
             )
 
-        current_date += (
-            timedelta(
-                days=1
-            )
+        current_date += timedelta(
+            days=1
         )
 
     return expected_dates
+
+
+def generate_expected_run_dates(
+    *,
+    start_date: date,
+    end_date: date,
+    expected_weekdays: (
+        Iterable[int]
+        | None
+    ) = None,
+    excluded_dates: (
+        Iterable[date]
+        | None
+    ) = None,
+) -> list[date]:
+    """
+    Gera os ciclos esperados.
+
+    Regra principal:
+        usa o calendário oficial B3.
+
+    Durante a migração, parâmetros legados
+    ainda são aceitos para consumidores e
+    testes existentes.
+
+    Quando nenhum override legado é
+    informado, a B3 é a única fonte de
+    verdade operacional.
+    """
+
+    if start_date > end_date:
+        raise ValueError(
+            "start_date must be "
+            "<= end_date."
+        )
+
+    legacy_override_requested = (
+        expected_weekdays is not None
+        or excluded_dates is not None
+    )
+
+    if legacy_override_requested:
+        weekdays = (
+            DEFAULT_EXPECTED_WEEKDAYS
+            if expected_weekdays is None
+            else expected_weekdays
+        )
+
+        return (
+            generate_legacy_expected_run_dates(
+                start_date=start_date,
+                end_date=end_date,
+                expected_weekdays=(
+                    weekdays
+                ),
+                excluded_dates=(
+                    excluded_dates
+                ),
+            )
+        )
+
+    return generate_trading_days(
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 
 def detect_missing_run_dates(
@@ -179,8 +219,15 @@ def assess_expected_cycles(
     ) = None,
 ) -> dict:
     """
-    Compara calendário operacional esperado
-    contra os ciclos realmente observados.
+    Compara o calendário esperado contra
+    os ciclos realmente observados.
+
+    Por padrão utiliza o calendário oficial
+    da B3.
+
+    Os argumentos expected_weekdays e
+    excluded_dates existem temporariamente
+    para compatibilidade durante a migração.
 
     Retorna somente diagnóstico.
     Nenhuma ação AWS é executada.

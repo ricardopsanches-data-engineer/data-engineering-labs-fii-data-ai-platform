@@ -10,6 +10,11 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from src.orchestration.b3_trading_calendar import (
+    is_trading_day,
+    previous_trading_day,
+)
+
 
 B3_DOWNLOAD_URL = (
     "https://www.b3.com.br/"
@@ -92,38 +97,6 @@ def parse_date(
             "Data inválida. "
             "Use o formato YYYY-MM-DD."
         ) from error
-
-
-def get_previous_business_day(
-    reference_date: date | None = None,
-) -> date:
-    """
-    Retorna o último dia útil candidato.
-
-    Esta função considera apenas
-    sábado e domingo.
-
-    Feriados e datas sem pregão da B3
-    são tratados posteriormente pela
-    validação do arquivo.
-    """
-
-    if reference_date is None:
-        reference_date = date.today()
-
-    candidate = (
-        reference_date
-        - timedelta(
-            days=1
-        )
-    )
-
-    while candidate.weekday() >= 5:
-        candidate -= timedelta(
-            days=1
-        )
-
-    return candidate
 
 
 def build_b3_filename(
@@ -528,7 +501,7 @@ def download_b3_file(
     except requests.RequestException as error:
         print(
             f"{trade_date} | "
-            f"erro HTTP | "
+            "erro HTTP | "
             f"{error}"
         )
 
@@ -537,7 +510,7 @@ def download_b3_file(
     if response.status_code == 404:
         print(
             f"{trade_date} | "
-            "sem pregão"
+            "pregão esperado, arquivo não encontrado"
         )
 
         return None
@@ -568,7 +541,7 @@ def download_b3_file(
     if not is_valid:
         print(
             f"{trade_date} | "
-            "sem pregão / arquivo inválido | "
+            "arquivo B3 inválido | "
             f"{validation_reason} | "
             f"{len(content):,} bytes"
         )
@@ -600,6 +573,12 @@ def download_single_date(
 ) -> None:
     """
     Modo para uma data específica.
+
+    A data explícita continua sendo aceita
+    para reprocessamento/manual backfill.
+
+    A validação de existência do arquivo
+    permanece sob responsabilidade da B3.
     """
 
     session = create_session()
@@ -664,19 +643,20 @@ def download_latest_trading_days(
     """
     Obtém os N pregões B3 válidos mais recentes.
 
-    Uma data só é contabilizada quando
-    passa pelo contrato estrutural:
+    O calendário oficial da B3 determina
+    previamente quais datas possuem pregão
+    esperado.
+
+    WEEKEND e B3_HOLIDAY não geram
+    requisição HTTP.
+
+    Uma data classificada como TRADING_DAY
+    só é contabilizada quando também passa
+    pelo contrato estrutural:
 
         ZIP externo
         -> SPREYYMMDD.zip
         -> XML não vazio
-
-    Isso permite lidar naturalmente com:
-    - fins de semana;
-    - feriados;
-    - datas sem relatório;
-    - ZIP vazio;
-    - RAW antigo inválido.
     """
 
     if days <= 0:
@@ -686,7 +666,9 @@ def download_latest_trading_days(
 
     if reference_date is None:
         candidate_date = (
-            get_previous_business_day()
+            previous_trading_day(
+                date.today()
+            )
         )
 
     else:
@@ -702,8 +684,9 @@ def download_latest_trading_days(
 
     checked_dates = 0
 
-    # Folga ampla para finais de semana,
-    # feriados e datas sem arquivo.
+    # Janela de segurança para a busca.
+    # Datas sem pregão são descartadas pelo
+    # calendário antes de qualquer HTTP.
     max_dates_to_check = (
         days * 4
         + 30
@@ -729,10 +712,9 @@ def download_latest_trading_days(
     ):
         checked_dates += 1
 
-        # Não faz requisição aos
-        # finais de semana.
-        if candidate_date.weekday() < 5:
-
+        if is_trading_day(
+            candidate_date
+        ):
             result = download_b3_file(
                 trade_date=candidate_date,
                 session=session,
