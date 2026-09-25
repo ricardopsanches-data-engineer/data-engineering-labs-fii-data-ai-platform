@@ -174,88 +174,6 @@ def test_parse_iso_date_rejects_invalid_value() -> None:
         )
 
 
-def test_parse_expected_weekdays_from_string() -> None:
-    result = (
-        gold_recovery_supervisor
-        .parse_expected_weekdays(
-            "0,1,2,3,4"
-        )
-    )
-
-    assert result == (
-        0,
-        1,
-        2,
-        3,
-        4,
-    )
-
-
-def test_parse_expected_weekdays_from_list() -> None:
-    result = (
-        gold_recovery_supervisor
-        .parse_expected_weekdays(
-            [
-                4,
-                0,
-                2,
-                1,
-                3,
-                3,
-            ]
-        )
-    )
-
-    assert result == (
-        0,
-        1,
-        2,
-        3,
-        4,
-    )
-
-
-def test_parse_expected_weekdays_rejects_invalid_day() -> None:
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Weekday must be between "
-            "0 and 6"
-        ),
-    ):
-        (
-            gold_recovery_supervisor
-            .parse_expected_weekdays(
-                "0,1,7"
-            )
-        )
-
-
-def test_parse_excluded_dates() -> None:
-    result = (
-        gold_recovery_supervisor
-        .parse_excluded_dates(
-            (
-                "2026-09-07,"
-                "2026-10-12"
-            )
-        )
-    )
-
-    assert result == (
-        date(
-            2026,
-            9,
-            7,
-        ),
-        date(
-            2026,
-            10,
-            12,
-        ),
-    )
-
-
 def test_resolve_lookback_days_prefers_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -318,54 +236,6 @@ def test_resolve_lookback_days_uses_default(
     )
 
 
-def test_resolve_expected_weekdays_uses_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv(
-        (
-            "FII_GOLD_RECOVERY_"
-            "EXPECTED_WEEKDAYS"
-        ),
-        raising=False,
-    )
-
-    result = (
-        gold_recovery_supervisor
-        .resolve_expected_weekdays(
-            event={}
-        )
-    )
-
-    assert result == (
-        0,
-        1,
-        2,
-        3,
-        4,
-    )
-
-
-def test_resolve_excluded_dates_from_event() -> None:
-    result = (
-        gold_recovery_supervisor
-        .resolve_excluded_dates(
-            event={
-                "excluded_dates": [
-                    "2026-09-07",
-                ],
-            }
-        )
-    )
-
-    assert result == (
-        date(
-            2026,
-            9,
-            7,
-        ),
-    )
-
-
 def test_resolve_raw_to_silver_functions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -399,16 +269,6 @@ def test_build_supervisor_configuration(
                     "2026-09-25"
                 ),
                 "lookback_days": 5,
-                "expected_weekdays": [
-                    0,
-                    1,
-                    2,
-                    3,
-                    4,
-                ],
-                "excluded_dates": [
-                    "2026-09-07",
-                ],
             }
         )
     )
@@ -450,29 +310,53 @@ def test_build_supervisor_configuration(
     )
 
     assert (
-        result[
-            "expected_weekdays"
-        ]
-        == (
-            0,
-            1,
-            2,
-            3,
-            4,
+        "expected_weekdays"
+        not in result
+    )
+
+    assert (
+        "excluded_dates"
+        not in result
+    )
+
+
+def test_build_supervisor_configuration_ignores_legacy_calendar_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_required_environment(
+        monkeypatch
+    )
+
+    result = (
+        gold_recovery_supervisor
+        .build_supervisor_configuration(
+            event={
+                "end_date": (
+                    "2026-09-25"
+                ),
+                "lookback_days": 5,
+                "expected_weekdays": [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                ],
+                "excluded_dates": [
+                    "2026-09-07",
+                ],
+            }
         )
     )
 
     assert (
-        result[
-            "excluded_dates"
-        ]
-        == (
-            date(
-                2026,
-                9,
-                7,
-            ),
-        )
+        "expected_weekdays"
+        not in result
+    )
+
+    assert (
+        "excluded_dates"
+        not in result
     )
 
 
@@ -575,12 +459,6 @@ def test_run_gold_recovery_supervisor(
                     "2026-09-25"
                 ),
                 "lookback_days": 5,
-                "expected_weekdays": (
-                    "0,1,2,3,4"
-                ),
-                "excluded_dates": [
-                    "2026-09-07",
-                ],
             }
         )
     )
@@ -611,29 +489,13 @@ def test_run_gold_recovery_supervisor(
     )
 
     assert (
-        captured_plan_arguments[
-            "expected_weekdays"
-        ]
-        == (
-            0,
-            1,
-            2,
-            3,
-            4,
-        )
+        "expected_weekdays"
+        not in captured_plan_arguments
     )
 
     assert (
-        captured_plan_arguments[
-            "excluded_dates"
-        ]
-        == (
-            date(
-                2026,
-                9,
-                7,
-            ),
-        )
+        "excluded_dates"
+        not in captured_plan_arguments
     )
 
     assert (
@@ -701,6 +563,89 @@ def test_run_gold_recovery_supervisor(
             "execution"
         ]
         is execution_result
+    )
+
+
+def test_run_gold_recovery_supervisor_ignores_legacy_calendar_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_required_environment(
+        monkeypatch
+    )
+
+    captured_plan_arguments = {}
+
+    def fake_build_recovery_plan(
+        **kwargs,
+    ):
+        captured_plan_arguments.update(
+            kwargs
+        )
+
+        return {
+            "status": "COMPLETE",
+            "window": {
+                "start_date": (
+                    "2026-09-25"
+                ),
+                "end_date": (
+                    "2026-09-25"
+                ),
+                "lookback_days": 1,
+            },
+            "status_counts": {
+                "COMPLETE": 1,
+            },
+            "action_counts": {
+                "NO_ACTION": 1,
+            },
+            "actionable_cycles": 0,
+            "blocked_cycles": 0,
+            "assessments": [],
+            "total_assessments": 1,
+        }
+
+    monkeypatch.setattr(
+        gold_recovery_supervisor,
+        "build_recovery_plan",
+        fake_build_recovery_plan,
+    )
+
+    monkeypatch.setattr(
+        gold_recovery_supervisor,
+        "execute_recovery_plan",
+        lambda **kwargs: {
+            "status": "EXECUTED",
+            "results": [],
+        },
+    )
+
+    (
+        gold_recovery_supervisor
+        .run_gold_recovery_supervisor(
+            event={
+                "end_date": (
+                    "2026-09-25"
+                ),
+                "lookback_days": 1,
+                "expected_weekdays": (
+                    "0,1,2,3,4"
+                ),
+                "excluded_dates": [
+                    "2026-09-07",
+                ],
+            }
+        )
+    )
+
+    assert (
+        "expected_weekdays"
+        not in captured_plan_arguments
+    )
+
+    assert (
+        "excluded_dates"
+        not in captured_plan_arguments
     )
 
 

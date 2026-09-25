@@ -21,14 +21,6 @@ PLATFORM_TIMEZONE = ZoneInfo(
 
 DEFAULT_LOOKBACK_DAYS = 30
 
-DEFAULT_EXPECTED_WEEKDAYS = (
-    0,
-    1,
-    2,
-    3,
-    4,
-)
-
 RAW_TO_SILVER_ENVIRONMENT_VARIABLES = {
     "b3": (
         "FII_B3_RAW_TO_SILVER_FUNCTION_NAME"
@@ -206,248 +198,6 @@ def resolve_lookback_days(
     return DEFAULT_LOOKBACK_DAYS
 
 
-def parse_expected_weekdays(
-    value: Any,
-) -> tuple[int, ...]:
-    """
-    Converte dias da semana para inteiros.
-
-    Convenção Python:
-
-    0 = segunda-feira
-    1 = terça-feira
-    ...
-    6 = domingo
-
-    Formatos aceitos:
-
-    [0, 1, 2, 3, 4]
-
-    ou:
-
-    "0,1,2,3,4"
-    """
-
-    if isinstance(
-        value,
-        str,
-    ):
-        raw_values = [
-            item.strip()
-            for item
-            in value.split(",")
-            if item.strip()
-        ]
-
-    elif isinstance(
-        value,
-        (
-            list,
-            tuple,
-            set,
-        ),
-    ):
-        raw_values = list(
-            value
-        )
-
-    else:
-        raise ValueError(
-            "Invalid expected weekdays | "
-            f"value={value}"
-        )
-
-    weekdays = []
-
-    for raw_value in raw_values:
-        try:
-            weekday = int(
-                raw_value
-            )
-
-        except (
-            TypeError,
-            ValueError,
-        ) as exc:
-            raise ValueError(
-                "Invalid weekday value | "
-                f"value={raw_value}"
-            ) from exc
-
-        if weekday < 0 or weekday > 6:
-            raise ValueError(
-                "Weekday must be between "
-                "0 and 6 | "
-                f"value={weekday}"
-            )
-
-        weekdays.append(
-            weekday
-        )
-
-    if not weekdays:
-        raise ValueError(
-            "Expected weekdays cannot "
-            "be empty."
-        )
-
-    return tuple(
-        sorted(
-            set(
-                weekdays
-            )
-        )
-    )
-
-
-def resolve_expected_weekdays(
-    *,
-    event: dict[str, Any],
-) -> tuple[int, ...]:
-    """
-    Resolve calendário semanal esperado.
-
-    Ordem:
-
-    1. event.expected_weekdays;
-    2. FII_GOLD_RECOVERY_EXPECTED_WEEKDAYS;
-    3. segunda a sexta.
-    """
-
-    explicit_weekdays = (
-        event.get(
-            "expected_weekdays"
-        )
-    )
-
-    if explicit_weekdays is not None:
-        return parse_expected_weekdays(
-            explicit_weekdays
-        )
-
-    environment_weekdays = (
-        os.environ.get(
-            "FII_GOLD_RECOVERY_EXPECTED_WEEKDAYS"
-        )
-    )
-
-    if environment_weekdays:
-        return parse_expected_weekdays(
-            environment_weekdays
-        )
-
-    return DEFAULT_EXPECTED_WEEKDAYS
-
-
-def parse_excluded_dates(
-    value: Any,
-) -> tuple[date, ...]:
-    """
-    Converte datas excluídas do calendário.
-
-    Formatos aceitos:
-
-    [
-        "2026-09-07",
-        "2026-10-12",
-    ]
-
-    ou:
-
-    "2026-09-07,2026-10-12"
-    """
-
-    if value is None:
-        return ()
-
-    if isinstance(
-        value,
-        str,
-    ):
-        raw_values = [
-            item.strip()
-            for item
-            in value.split(",")
-            if item.strip()
-        ]
-
-    elif isinstance(
-        value,
-        (
-            list,
-            tuple,
-            set,
-        ),
-    ):
-        raw_values = list(
-            value
-        )
-
-    else:
-        raise ValueError(
-            "Invalid excluded dates | "
-            f"value={value}"
-        )
-
-    excluded_dates = []
-
-    for raw_value in raw_values:
-        excluded_dates.append(
-            parse_iso_date(
-                value=raw_value,
-                field_name=(
-                    "excluded_dates"
-                ),
-            )
-        )
-
-    return tuple(
-        sorted(
-            set(
-                excluded_dates
-            )
-        )
-    )
-
-
-def resolve_excluded_dates(
-    *,
-    event: dict[str, Any],
-) -> tuple[date, ...]:
-    """
-    Resolve exceções explícitas do
-    calendário operacional.
-
-    Ordem:
-
-    1. event.excluded_dates;
-    2. FII_GOLD_RECOVERY_EXCLUDED_DATES;
-    3. nenhuma exclusão.
-
-    O supervisor não inventa feriados.
-    """
-
-    if "excluded_dates" in event:
-        return parse_excluded_dates(
-            event.get(
-                "excluded_dates"
-            )
-        )
-
-    environment_dates = (
-        os.environ.get(
-            "FII_GOLD_RECOVERY_EXCLUDED_DATES"
-        )
-    )
-
-    if environment_dates:
-        return parse_excluded_dates(
-            environment_dates
-        )
-
-    return ()
-
-
 def resolve_raw_to_silver_functions(
 ) -> dict[str, str]:
     """
@@ -482,6 +232,13 @@ def build_supervisor_configuration(
     """
     Resolve toda configuração necessária
     para uma rodada do supervisor.
+
+    O calendário operacional não é mais
+    configurado pelo supervisor.
+
+    A fonte de verdade passa a ser o
+    calendário oficial B3 consumido pelo
+    recovery plan.
     """
 
     bucket = (
@@ -510,18 +267,6 @@ def build_supervisor_configuration(
         )
     )
 
-    expected_weekdays = (
-        resolve_expected_weekdays(
-            event=event
-        )
-    )
-
-    excluded_dates = (
-        resolve_excluded_dates(
-            event=event
-        )
-    )
-
     return {
         "bucket": bucket,
         "gold_function_name": (
@@ -533,12 +278,6 @@ def build_supervisor_configuration(
         "end_date": end_date,
         "lookback_days": (
             lookback_days
-        ),
-        "expected_weekdays": (
-            expected_weekdays
-        ),
-        "excluded_dates": (
-            excluded_dates
         ),
     }
 
@@ -564,6 +303,10 @@ def run_gold_recovery_supervisor(
     Uma execução futura redescobre o
     estado físico atualizado e continua
     a recuperação quando necessário.
+
+    O calendário operacional esperado é
+    resolvido pelo recovery plan através
+    do calendário oficial da B3.
     """
 
     configuration = (
@@ -598,26 +341,11 @@ def run_gold_recovery_supervisor(
         ]
     )
 
-    expected_weekdays = (
-        configuration[
-            "expected_weekdays"
-        ]
-    )
-
-    excluded_dates = (
-        configuration[
-            "excluded_dates"
-        ]
-    )
-
     print(
         "Gold Recovery Supervisor START | "
         f"end_date={end_date.isoformat()} | "
         f"lookback_days={lookback_days} | "
-        "expected_weekdays="
-        f"{list(expected_weekdays)} | "
-        "excluded_dates="
-        f"{[item.isoformat() for item in excluded_dates]}"
+        "calendar=B3"
     )
 
     recovery_plan = (
@@ -626,12 +354,6 @@ def run_gold_recovery_supervisor(
             end_date=end_date,
             lookback_days=(
                 lookback_days
-            ),
-            expected_weekdays=(
-                expected_weekdays
-            ),
-            excluded_dates=(
-                excluded_dates
             ),
         )
     )
