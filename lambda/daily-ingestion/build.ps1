@@ -22,6 +22,14 @@ $sourceDirectory = Join-Path `
     $repositoryRoot `
     "src"
 
+$calendarSourcePath = Join-Path `
+    $repositoryRoot `
+    "config\calendars\b3\2026.json"
+
+$calendarDestinationPath = Join-Path `
+    $packageDirectory `
+    "config\calendars\b3\2026.json"
+
 $fixedTimestamp = [DateTime]::SpecifyKind(
     (Get-Date "2026-01-01T00:00:00"),
     [DateTimeKind]::Utc
@@ -128,6 +136,30 @@ Copy-Item `
     -Recurse
 
 Write-Host
+Write-Host "Copying B3 trading calendar..."
+
+if (-not (Test-Path $calendarSourcePath)) {
+    throw (
+        "Required B3 calendar file missing: " +
+        "config\calendars\b3\2026.json"
+    )
+}
+
+$calendarDestinationDirectory = Split-Path `
+    -Parent `
+    $calendarDestinationPath
+
+New-Item `
+    -ItemType Directory `
+    -Force `
+    -Path $calendarDestinationDirectory |
+    Out-Null
+
+Copy-Item `
+    -Path $calendarSourcePath `
+    -Destination $calendarDestinationPath
+
+Write-Host
 Write-Host "Removing Python cache directories..."
 
 Get-ChildItem `
@@ -158,7 +190,10 @@ $requiredFiles = @(
     "src\pipelines\b3_raw_to_s3.py",
     "src\pipelines\cvm_raw_to_s3.py",
     "src\storage\s3.py",
+    "src\ingestion\b3\client.py",
     "src\ingestion\b3\fingerprint.py",
+    "src\orchestration\b3_trading_calendar.py",
+    "config\calendars\b3\2026.json",
     "requests\__init__.py"
 )
 
@@ -176,6 +211,132 @@ foreach ($requiredFile in $requiredFiles) {
 
     Write-Host "OK: $requiredFile"
 }
+
+Write-Host
+Write-Host "Running Python import and B3 calendar smoke test..."
+
+$smokeTestPath = Join-Path `
+    $buildDirectory `
+    "import_smoke_test.py"
+
+$smokeTestContent = @'
+import importlib
+from datetime import date
+
+modules = [
+    "requests",
+    "src.orchestration.b3_trading_calendar",
+    "src.ingestion.b3.client",
+    "src.pipelines.b3_raw_to_s3",
+]
+
+for module_name in modules:
+    importlib.import_module(module_name)
+    print("IMPORT OK: " + module_name)
+
+from src.orchestration.b3_trading_calendar import (
+    classify_date,
+    load_b3_calendar,
+    previous_trading_day,
+)
+
+calendar = load_b3_calendar(
+    year=2026
+)
+
+if calendar.get("year") != 2026:
+    raise RuntimeError(
+        "B3 calendar smoke test failed: invalid year."
+    )
+
+print(
+    "CALENDAR OK: "
+    "config/calendars/b3/2026.json"
+)
+
+holiday = classify_date(
+    date(2026, 10, 12)
+)
+
+if holiday.get("status") != "B3_HOLIDAY":
+    raise RuntimeError(
+        "B3 calendar smoke test failed: "
+        "2026-10-12 must be B3_HOLIDAY."
+    )
+
+if holiday.get("expected") is not False:
+    raise RuntimeError(
+        "B3 calendar smoke test failed: "
+        "2026-10-12 must not be expected."
+    )
+
+print(
+    "CALENDAR CLASSIFICATION OK: "
+    "2026-10-12=B3_HOLIDAY"
+)
+
+previous_date = previous_trading_day(
+    date(2026, 10, 13)
+)
+
+if previous_date != date(2026, 10, 9):
+    raise RuntimeError(
+        "B3 calendar smoke test failed: "
+        "previous trading day for "
+        "2026-10-13 must be 2026-10-09."
+    )
+
+print(
+    "CALENDAR D-1 OK: "
+    "2026-10-13 -> 2026-10-09"
+)
+'@
+
+Set-Content `
+    -Path $smokeTestPath `
+    -Value $smokeTestContent `
+    -Encoding utf8
+
+$previousPythonPath = $env:PYTHONPATH
+
+try {
+    $env:PYTHONPATH = $packageDirectory
+
+    Push-Location $packageDirectory
+
+    try {
+        & python $smokeTestPath
+
+        $pythonExitCode = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+}
+finally {
+    if ($null -eq $previousPythonPath) {
+        Remove-Item Env:PYTHONPATH `
+            -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:PYTHONPATH = $previousPythonPath
+    }
+
+    Remove-Item `
+        $smokeTestPath `
+        -Force `
+        -ErrorAction SilentlyContinue
+}
+
+if ($pythonExitCode -ne 0) {
+    throw (
+        "Python import/calendar smoke test failed " +
+        "with exit code $pythonExitCode."
+    )
+}
+
+Write-Host
+Write-Host "SMOKE OK: daily ingestion and B3 calendar package are complete"
 
 Write-Host
 Write-Host "Creating deterministic deployment ZIP..."
@@ -266,7 +427,10 @@ try {
         "src/pipelines/b3_raw_to_s3.py",
         "src/pipelines/cvm_raw_to_s3.py",
         "src/storage/s3.py",
+        "src/ingestion/b3/client.py",
         "src/ingestion/b3/fingerprint.py",
+        "src/orchestration/b3_trading_calendar.py",
+        "config/calendars/b3/2026.json",
         "requests/__init__.py"
     )
 
@@ -295,6 +459,7 @@ try {
     }
 
     Write-Host "ZIP OK: no non-deterministic pip artifacts"
+    Write-Host "ZIP OK: daily ingestion package is complete"
 }
 finally {
     $zipArchive.Dispose()

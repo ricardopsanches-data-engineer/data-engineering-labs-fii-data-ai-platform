@@ -10,6 +10,7 @@ from src.ingestion.b3.client import (
     download_latest_trading_days,
 )
 from src.ingestion.b3.fingerprint import calculate_b3_content_sha256
+from src.orchestration.b3_trading_calendar import is_trading_day
 from src.storage.s3 import upload_file
 
 BUCKET_NAME = os.environ.get(
@@ -81,6 +82,9 @@ def ingest_single_date(
 ) -> None:
     """
     Reprocessa uma data específica da B3.
+
+    A data explícita continua disponível
+    para reprocessamento manual.
     """
 
     print("======================================")
@@ -118,11 +122,16 @@ def ingest_backfill(
     """
     Executa backfill da B3 em um intervalo de datas.
 
-    Finais de semana são ignorados.
+    O calendário oficial da B3 determina
+    previamente quais datas possuem pregão
+    esperado.
 
-    Datas sem pregão ou sem arquivo válido
-    também são ignoradas sem interromper
-    todo o backfill.
+    WEEKEND e B3_HOLIDAY são ignorados antes
+    de qualquer tentativa de download.
+
+    Datas classificadas como TRADING_DAY que
+    não possuam arquivo válido também são
+    ignoradas sem interromper todo o backfill.
     """
 
     if start_date > end_date:
@@ -143,18 +152,23 @@ def ingest_backfill(
     current_date = start_date
 
     processed = 0
-    skipped_weekend = 0
+    skipped_non_trading = 0
     unavailable = 0
 
     while current_date <= end_date:
-        if current_date.weekday() >= 5:
+        if not is_trading_day(
+            current_date
+        ):
             print(
                 f"{current_date} | "
-                "fim de semana | ignorado"
+                "sem pregão esperado pelo "
+                "calendário B3 | ignorado"
             )
 
-            skipped_weekend += 1
-            current_date += timedelta(days=1)
+            skipped_non_trading += 1
+            current_date += timedelta(
+                days=1
+            )
             continue
 
         local_path = download_b3_file(
@@ -166,11 +180,15 @@ def ingest_backfill(
         if local_path is None:
             print(
                 f"{current_date} | "
-                "sem pregão/arquivo válido | ignorado"
+                "pregão esperado, "
+                "arquivo indisponível/inválido | "
+                "ignorado"
             )
 
             unavailable += 1
-            current_date += timedelta(days=1)
+            current_date += timedelta(
+                days=1
+            )
             continue
 
         upload_b3_file(
@@ -179,19 +197,24 @@ def ingest_backfill(
         )
 
         processed += 1
-        current_date += timedelta(days=1)
+        current_date += timedelta(
+            days=1
+        )
 
     print()
     print("======================================")
     print("Resumo do backfill")
     print("======================================")
-    print(f"Arquivos processados: {processed}")
     print(
-        "Finais de semana ignorados: "
-        f"{skipped_weekend}"
+        f"Arquivos processados: "
+        f"{processed}"
     )
     print(
-        "Datas sem arquivo válido: "
+        "Datas sem pregão esperado: "
+        f"{skipped_non_trading}"
+    )
+    print(
+        "Pregões esperados sem arquivo válido: "
         f"{unavailable}"
     )
 
