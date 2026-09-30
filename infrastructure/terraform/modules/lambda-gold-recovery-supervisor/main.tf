@@ -47,7 +47,8 @@ resource "aws_iam_policy" "lambda_execution" {
               "raw/b3-instruments/*",
               "silver/b3/*",
               "silver/cvm/*",
-              "silver/b3-instruments/*"
+              "silver/b3-instruments/*",
+              "control/gold-recovery-watchdog/*"
             ]
           }
         }
@@ -77,6 +78,19 @@ resource "aws_iam_policy" "lambda_execution" {
         )
       },
       {
+        Sid    = "ReadWriteGoldRecoveryWatchdogState"
+        Effect = "Allow"
+
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+
+        Resource = (
+          "${var.data_lake_bucket_arn}/control/gold-recovery-watchdog/*"
+        )
+      },
+      {
         Sid    = "InvokeGoldRecoveryTargets"
         Effect = "Allow"
 
@@ -92,6 +106,16 @@ resource "aws_iam_policy" "lambda_execution" {
             var.raw_to_silver_function_arns
           )
         )
+      },
+      {
+        Sid    = "PublishGoldRecoveryWatchdogAlerts"
+        Effect = "Allow"
+
+        Action = [
+          "sns:Publish"
+        ]
+
+        Resource = var.operational_alert_topic_arn
       },
       {
         Sid    = "CloudWatchLogs"
@@ -170,6 +194,10 @@ resource "aws_lambda_function" "gold_recovery_supervisor" {
         tostring(
           var.lookback_days
         )
+      )
+
+      FII_GOLD_RECOVERY_WATCHDOG_SNS_TOPIC_ARN = (
+        var.operational_alert_topic_arn
       )
     }
   }

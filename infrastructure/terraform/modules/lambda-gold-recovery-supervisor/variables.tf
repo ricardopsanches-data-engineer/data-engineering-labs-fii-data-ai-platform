@@ -3,11 +3,13 @@ variable "function_name" {
   type        = string
 }
 
+
 variable "runtime" {
   description = "Lambda Python runtime."
   type        = string
   default     = "python3.12"
 }
+
 
 variable "handler" {
   description = "Lambda handler entry point."
@@ -15,45 +17,60 @@ variable "handler" {
   default     = "src.orchestration.gold_recovery_supervisor.lambda_handler"
 }
 
+
 variable "filename" {
   description = "Path to the Lambda deployment ZIP file."
   type        = string
 }
+
 
 variable "source_code_hash" {
   description = "Base64-encoded SHA256 hash of the Lambda deployment package."
   type        = string
 }
 
+
 variable "data_lake_bucket_name" {
   description = "Name of the S3 data lake bucket used by the Gold recovery supervisor."
   type        = string
 }
+
 
 variable "data_lake_bucket_arn" {
   description = "ARN of the S3 data lake bucket used by the Gold recovery supervisor."
   type        = string
 }
 
+
 variable "gold_lambda_function_name" {
   description = "Name of the Gold FII master Lambda function."
   type        = string
 }
+
 
 variable "gold_lambda_function_arn" {
   description = "ARN of the Gold FII master Lambda function."
   type        = string
 }
 
+
 variable "raw_to_silver_function_names" {
   description = "Map of RAW-to-Silver Lambda function names keyed by recovery source."
   type        = map(string)
 }
 
+
 variable "raw_to_silver_function_arns" {
   description = "Map of RAW-to-Silver Lambda function ARNs keyed by recovery source."
   type        = map(string)
 }
+
+
+variable "operational_alert_topic_arn" {
+  description = "ARN of the SNS topic used by the Gold recovery watchdog for operational notifications."
+  type        = string
+}
+
 
 variable "lookback_days" {
   description = "Operational recovery lookback window in days."
@@ -66,11 +83,13 @@ variable "lookback_days" {
   }
 }
 
+
 variable "timeout" {
   description = "Maximum Lambda execution time in seconds."
   type        = number
   default     = 60
 }
+
 
 variable "memory_size" {
   description = "Lambda memory size in MB."
@@ -78,11 +97,13 @@ variable "memory_size" {
   default     = 128
 }
 
+
 variable "log_retention_days" {
   description = "CloudWatch Logs retention period in days."
   type        = number
   default     = 14
 }
+
 
 variable "tags" {
   description = "Additional tags applied to Lambda resources."

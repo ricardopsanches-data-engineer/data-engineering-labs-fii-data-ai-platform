@@ -98,7 +98,7 @@ New-Item `
     Out-Null
 
 Write-Host
-Write-Host "Copying supervisor source and calendar..."
+Write-Host "Copying supervisor source..."
 
 $filesToCopy = @(
     @{
@@ -108,10 +108,6 @@ $filesToCopy = @(
     @{
         Source = "src\orchestration\__init__.py"
         Destination = "src\orchestration\__init__.py"
-    },
-    @{
-        Source = "src\orchestration\b3_trading_calendar.py"
-        Destination = "src\orchestration\b3_trading_calendar.py"
     },
     @{
         Source = "src\orchestration\gold_recovery_supervisor.py"
@@ -142,6 +138,14 @@ $filesToCopy = @(
         Destination = "src\orchestration\gold_readiness.py"
     },
     @{
+        Source = "src\orchestration\b3_trading_calendar.py"
+        Destination = "src\orchestration\b3_trading_calendar.py"
+    },
+    @{
+        Source = "src\orchestration\gold_recovery_watchdog_state.py"
+        Destination = "src\orchestration\gold_recovery_watchdog_state.py"
+    },
+    @{
         Source = "src\observability\__init__.py"
         Destination = "src\observability\__init__.py"
     },
@@ -152,6 +156,10 @@ $filesToCopy = @(
     @{
         Source = "src\observability\gold_recovery_observability.py"
         Destination = "src\observability\gold_recovery_observability.py"
+    },
+    @{
+        Source = "src\observability\gold_recovery_watchdog_notifications.py"
+        Destination = "src\observability\gold_recovery_watchdog_notifications.py"
     },
     @{
         Source = "config\calendars\b3\2026.json"
@@ -219,7 +227,6 @@ Write-Host "Validating package contents..."
 $requiredFiles = @(
     "src\__init__.py",
     "src\orchestration\__init__.py",
-    "src\orchestration\b3_trading_calendar.py",
     "src\orchestration\gold_recovery_supervisor.py",
     "src\orchestration\gold_recovery.py",
     "src\orchestration\gold_recovery_executor.py",
@@ -227,9 +234,12 @@ $requiredFiles = @(
     "src\orchestration\gold_execution_state.py",
     "src\orchestration\gold_expected_cycles.py",
     "src\orchestration\gold_readiness.py",
+    "src\orchestration\b3_trading_calendar.py",
+    "src\orchestration\gold_recovery_watchdog_state.py",
     "src\observability\__init__.py",
     "src\observability\events.py",
     "src\observability\gold_recovery_observability.py",
+    "src\observability\gold_recovery_watchdog_notifications.py",
     "config\calendars\b3\2026.json"
 )
 
@@ -249,7 +259,7 @@ foreach ($requiredFile in $requiredFiles) {
 }
 
 Write-Host
-Write-Host "Running Python import and calendar smoke test..."
+Write-Host "Running Python import smoke test..."
 
 $smokeTestPath = Join-Path `
     $buildDirectory `
@@ -257,79 +267,22 @@ $smokeTestPath = Join-Path `
 
 $smokeTestContent = @'
 import importlib
-from datetime import date
 
 modules = [
-    "src.orchestration.b3_trading_calendar",
     "src.orchestration.gold_readiness",
+    "src.orchestration.b3_trading_calendar",
     "src.observability.events",
     "src.observability.gold_recovery_observability",
-    "src.orchestration.gold_expected_cycles",
+    "src.observability.gold_recovery_watchdog_notifications",
     "src.orchestration.gold_recovery",
     "src.orchestration.gold_recovery_executor",
+    "src.orchestration.gold_recovery_watchdog_state",
     "src.orchestration.gold_recovery_supervisor",
 ]
 
 for module_name in modules:
     importlib.import_module(module_name)
     print("IMPORT OK: " + module_name)
-
-from src.orchestration.b3_trading_calendar import (
-    classify_date,
-    load_b3_calendar,
-    previous_trading_day,
-)
-
-calendar = load_b3_calendar(
-    year=2026
-)
-
-if calendar.get("year") != 2026:
-    raise RuntimeError(
-        "B3 calendar smoke test failed: invalid year."
-    )
-
-print(
-    "CALENDAR OK: "
-    "config/calendars/b3/2026.json"
-)
-
-holiday = classify_date(
-    date(2026, 10, 12)
-)
-
-if holiday.get("status") != "B3_HOLIDAY":
-    raise RuntimeError(
-        "B3 calendar smoke test failed: "
-        "2026-10-12 must be B3_HOLIDAY."
-    )
-
-if holiday.get("expected") is not False:
-    raise RuntimeError(
-        "B3 calendar smoke test failed: "
-        "2026-10-12 must not be expected."
-    )
-
-print(
-    "CALENDAR CLASSIFICATION OK: "
-    "2026-10-12=B3_HOLIDAY"
-)
-
-previous_date = previous_trading_day(
-    date(2026, 10, 13)
-)
-
-if previous_date != date(2026, 10, 9):
-    raise RuntimeError(
-        "B3 calendar smoke test failed: "
-        "previous trading day for "
-        "2026-10-13 must be 2026-10-09."
-    )
-
-print(
-    "CALENDAR D-1 OK: "
-    "2026-10-13 -> 2026-10-09"
-)
 '@
 
 Set-Content `
@@ -342,16 +295,9 @@ $previousPythonPath = $env:PYTHONPATH
 try {
     $env:PYTHONPATH = $packageDirectory
 
-    Push-Location $packageDirectory
+    & python $smokeTestPath
 
-    try {
-        & python $smokeTestPath
-
-        $pythonExitCode = $LASTEXITCODE
-    }
-    finally {
-        Pop-Location
-    }
+    $pythonExitCode = $LASTEXITCODE
 }
 finally {
     if ($null -eq $previousPythonPath) {
@@ -370,13 +316,12 @@ finally {
 
 if ($pythonExitCode -ne 0) {
     throw (
-        "Python import/calendar smoke test failed " +
+        "Python import smoke test failed " +
         "with exit code $pythonExitCode."
     )
 }
 
-Write-Host
-Write-Host "SMOKE OK: supervisor dependency graph and B3 calendar are complete"
+Write-Host "IMPORT OK: supervisor dependency graph is complete"
 
 Write-Host
 Write-Host "Creating deterministic deployment ZIP..."

@@ -473,6 +473,10 @@ module "lambda_gold_recovery_supervisor" {
     )
   }
 
+  operational_alert_topic_arn = (
+    module.gold_operational_observability.sns_topic_arn
+  )
+
   lookback_days = 30
 
   timeout     = 60
@@ -484,6 +488,37 @@ module "lambda_gold_recovery_supervisor" {
     Project     = "fii-data-ai-platform"
     Environment = "dev"
     Component   = "GoldRecoverySupervisor"
+    ManagedBy   = "Terraform"
+  }
+}
+
+
+module "gold_recovery_watchdog_scheduler" {
+  source = "../../modules/gold-recovery-watchdog-scheduler"
+
+  schedule_name_prefix = (
+    "fii-data-ai-platform-dev-gold-recovery-watchdog"
+  )
+
+  supervisor_lambda_arn = (
+    module.lambda_gold_recovery_supervisor.function_arn
+  )
+
+  schedule_timezone = (
+    "America/Sao_Paulo"
+  )
+
+  lookback_days = 1
+
+  enabled = true
+
+  maximum_event_age_seconds = 3600
+  maximum_retry_attempts    = 0
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "GoldRecoveryWatchdog"
     ManagedBy   = "Terraform"
   }
 }
