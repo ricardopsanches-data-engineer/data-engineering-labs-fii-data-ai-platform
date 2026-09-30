@@ -19,4 +19,12 @@ module "s3_b3_silver_trigger" {
   b3_instruments_lambda_function_arn = (
     module.lambda_b3_instruments_silver.function_arn
   )
+
+  gold_readiness_lambda_function_name = (
+    module.lambda_gold_readiness.function_name
+  )
+
+  gold_readiness_lambda_function_arn = (
+    module.lambda_gold_readiness.function_arn
+  )
 }

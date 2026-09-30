@@ -1,9 +1,16 @@
 import os
 import re
+
+from datetime import date
 from pathlib import Path
 from urllib.parse import unquote_plus
 
 import boto3
+
+from src.orchestration.gold_readiness import (
+    get_s3_object_run_date,
+    write_success_marker,
+)
 
 from src.pipelines.b3_instruments_raw_to_silver import (
     transform_b3_instruments_raw_to_silver,
@@ -20,6 +27,15 @@ TMP_SILVER_ROOT = Path(
 
 B3_INSTRUMENTS_RAW_FILE_PATTERN = re.compile(
     r"^pesquisa-pregao\.zip$",
+    re.IGNORECASE,
+)
+
+B3_INSTRUMENTS_RAW_KEY_PATTERN = re.compile(
+    r"^raw/b3-instruments/"
+    r"year=(\d{4})/"
+    r"month=(\d{2})/"
+    r"day=(\d{2})/"
+    r"pesquisa-pregao\.zip$",
     re.IGNORECASE,
 )
 
@@ -145,6 +161,18 @@ def validate_raw_key(
             "'pesquisa-pregao.zip'."
         )
 
+    if not (
+        B3_INSTRUMENTS_RAW_KEY_PATTERN
+        .fullmatch(
+            key
+        )
+    ):
+        raise ValueError(
+            "Invalid B3 Instruments "
+            f"RAW key structure: {key}."
+        )
+
+
 
 def build_local_raw_path(
     key: str,
@@ -188,6 +216,11 @@ def run_b3_instruments_raw_to_silver(
         key
     )
 
+    run_date = get_s3_object_run_date(
+        bucket=bucket,
+        key=key,
+    )
+
     local_raw_path = (
         build_local_raw_path(
             key
@@ -218,6 +251,40 @@ def run_b3_instruments_raw_to_silver(
             upload_to_s3=True,
             force=False,
         )
+    )
+
+    readiness = write_success_marker(
+        bucket=bucket,
+        run_date=run_date,
+        source="b3-instruments",
+        reference_date=str(
+            silver_metadata[
+                "reference_date"
+            ]
+        ),
+        silver_key=(
+            silver_metadata[
+                "s3_key"
+            ]
+        ),
+        records=(
+            silver_metadata[
+                "records"
+            ]
+        ),
+        extra={
+            "raw_key": key,
+            "inner_zip": (
+                silver_metadata[
+                    "inner_zip"
+                ]
+            ),
+            "selected_xml": (
+                silver_metadata[
+                    "selected_xml"
+                ]
+            ),
+        },
     )
 
     return {
@@ -269,6 +336,11 @@ def run_b3_instruments_raw_to_silver(
             silver_metadata.get(
                 "s3_uri"
             )
+        ),
+        "readiness_marker": (
+            readiness[
+                "marker_key"
+            ]
         ),
     }
 

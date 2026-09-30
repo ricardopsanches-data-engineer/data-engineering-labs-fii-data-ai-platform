@@ -1,10 +1,16 @@
 import os
 import re
+
 from datetime import date
 from pathlib import Path
 from urllib.parse import unquote_plus
 
 import boto3
+
+from src.orchestration.gold_readiness import (
+    get_s3_object_run_date,
+    write_success_marker,
+)
 
 from src.pipelines.cvm_raw_to_silver import (
     transform_cvm_raw_to_silver,
@@ -34,15 +40,22 @@ def extract_s3_objects(
         objects: list[tuple[str, str]] = []
 
         for record in event["Records"]:
-            if record.get("eventSource") != "aws:s3":
+            if record.get(
+                "eventSource"
+            ) != "aws:s3":
                 continue
 
-            s3_data = record.get("s3", {})
+            s3_data = record.get(
+                "s3",
+                {},
+            )
+
             bucket = (
                 s3_data
                 .get("bucket", {})
                 .get("name")
             )
+
             key = (
                 s3_data
                 .get("object", {})
@@ -51,7 +64,8 @@ def extract_s3_objects(
 
             if not bucket or not key:
                 raise ValueError(
-                    "Invalid S3 event: bucket or key is missing."
+                    "Invalid S3 event: "
+                    "bucket or key is missing."
                 )
 
             objects.append(
@@ -63,7 +77,8 @@ def extract_s3_objects(
 
         if not objects:
             raise ValueError(
-                "No valid S3 records found in event."
+                "No valid S3 records "
+                "found in event."
             )
 
         return objects
@@ -80,7 +95,8 @@ def extract_s3_objects(
         ]
 
     raise ValueError(
-        "Unsupported event format. Expected an S3 event or "
+        "Unsupported event format. "
+        "Expected an S3 event or "
         "{'bucket': '...', 'key': '...'}."
     )
 
@@ -88,13 +104,17 @@ def extract_s3_objects(
 def validate_raw_key(
     key: str,
 ) -> None:
-    if not key.startswith("raw/cvm/"):
+    if not key.startswith(
+        "raw/cvm/"
+    ):
         raise ValueError(
             f"Invalid CVM RAW key: {key}. "
             "Expected prefix 'raw/cvm/'."
         )
 
-    filename = Path(key).name
+    filename = Path(
+        key
+    ).name
 
     if not CVM_RAW_FILE_PATTERN.fullmatch(
         filename
@@ -120,7 +140,8 @@ def extract_reference_date(
 
     if match is None:
         raise ValueError(
-            f"Could not extract reference date from key: {key}"
+            "Could not extract reference date "
+            f"from key: {key}"
         )
 
     year, month, day = (
@@ -138,7 +159,10 @@ def extract_reference_date(
 def build_local_raw_path(
     key: str,
 ) -> Path:
-    return TMP_RAW_ROOT / Path(key).name
+    return (
+        TMP_RAW_ROOT
+        / Path(key).name
+    )
 
 
 def download_raw_from_s3(
@@ -172,8 +196,15 @@ def run_cvm_raw_to_silver(
         key
     )
 
-    local_raw_path = build_local_raw_path(
-        key
+    run_date = get_s3_object_run_date(
+        bucket=bucket,
+        key=key,
+    )
+
+    local_raw_path = (
+        build_local_raw_path(
+            key
+        )
     )
 
     download_raw_from_s3(
@@ -196,6 +227,26 @@ def run_cvm_raw_to_silver(
         )
     )
 
+    readiness = write_success_marker(
+        bucket=bucket,
+        run_date=run_date,
+        source="cvm",
+        reference_date=str(
+            silver_metadata[
+                "reference_date"
+            ]
+        ),
+        silver_key=silver_metadata[
+            "s3_key"
+        ],
+        records=silver_metadata[
+            "records"
+        ],
+        extra={
+            "raw_key": key,
+        },
+    )
+
     return {
         "status": "success",
         "source": "cvm",
@@ -210,11 +261,18 @@ def run_cvm_raw_to_silver(
         "records": silver_metadata[
             "records"
         ],
-        "reference_date": silver_metadata[
-            "reference_date"
-        ],
+        "reference_date": (
+            silver_metadata[
+                "reference_date"
+            ]
+        ),
         "s3_uri": silver_metadata.get(
             "s3_uri"
+        ),
+        "readiness_marker": (
+            readiness[
+                "marker_key"
+            ]
         ),
     }
 
@@ -232,7 +290,8 @@ def lambda_handler(
             bucket=bucket,
             key=key,
         )
-        for bucket, key in objects
+        for bucket, key
+        in objects
     ]
 
     if len(results) == 1:

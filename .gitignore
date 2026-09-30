@@ -60,3 +60,4 @@ tmp/
 
 # Corporate action migration backups
 config/corporate_actions/backups/
+lambda/gold-recovery-supervisor/package/

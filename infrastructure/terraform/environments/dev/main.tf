@@ -146,7 +146,7 @@ module "lambda_b3_silver" {
   function_name = "fii-data-ai-platform-dev-b3-raw-to-silver"
 
   image_uri = (
-    "${module.ecr_b3_silver.repository_url}:v0.1.3"
+    "${module.ecr_b3_silver.repository_url}:v0.1.4"
   )
 
   data_lake_bucket_name = module.s3_data_lake.bucket_name
@@ -175,7 +175,7 @@ module "lambda_cvm_silver" {
   function_name = "fii-data-ai-platform-dev-cvm-raw-to-silver"
 
   image_uri = (
-    "${module.ecr_cvm_silver.repository_url}:v0.1.2"
+    "${module.ecr_cvm_silver.repository_url}:v0.1.3"
   )
 
   data_lake_bucket_name = module.s3_data_lake.bucket_name
@@ -204,7 +204,7 @@ module "lambda_b3_instruments_silver" {
   function_name = "fii-data-ai-platform-dev-b3-instruments-raw-to-silver"
 
   image_uri = (
-    "${module.ecr_b3_instruments_silver.repository_url}:v0.1.1"
+    "${module.ecr_b3_instruments_silver.repository_url}:v0.1.2"
   )
 
   data_lake_bucket_name = module.s3_data_lake.bucket_name
@@ -284,6 +284,241 @@ module "ecr_b3_instruments_silver" {
     Project     = "fii-data-ai-platform"
     Environment = "dev"
     Component   = "B3InstrumentsSilver"
+    ManagedBy   = "Terraform"
+  }
+}
+
+module "ecr_fii_master_gold" {
+  source = "../../modules/ecr"
+
+  repository_name = "fii-data-ai-platform-dev-fii-master-gold"
+
+  lambda_source_arn = "arn:aws:lambda:sa-east-1:625685670804:function:fii-data-ai-platform-dev-fii-master-gold"
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "FiiMasterGold"
+    ManagedBy   = "Terraform"
+  }
+}
+
+module "lambda_fii_master_gold" {
+  source = "../../modules/lambda-fii-master-gold"
+
+  function_name = "fii-data-ai-platform-dev-fii-master-gold"
+
+  image_uri = (
+    "${module.ecr_fii_master_gold.repository_url}:v0.1.5"
+  )
+
+  data_lake_bucket_name = module.s3_data_lake.bucket_name
+  data_lake_bucket_arn  = module.s3_data_lake.bucket_arn
+
+  timeout     = 300
+  memory_size = 2048
+
+  log_retention_days = 14
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "FiiMasterGold"
+    ManagedBy   = "Terraform"
+  }
+
+  depends_on = [
+    module.ecr_fii_master_gold
+  ]
+}
+
+module "gold_operational_observability" {
+  source = "../../modules/gold-operational-observability"
+
+  log_group_name = (
+    module.lambda_fii_master_gold.log_group_name
+  )
+
+  metric_namespace = (
+    "FiiDataAiPlatform/Gold"
+  )
+
+  operational_error_metric_name = (
+    "OperationalErrors"
+  )
+
+  alarm_name = (
+    "fii-data-ai-platform-dev-gold-operational-errors"
+  )
+
+  alarm_description = (
+    "Gold operational ERROR event detected in dev."
+  )
+
+  alarm_period_seconds = 300
+
+  alarm_evaluation_periods = 1
+
+  alarm_threshold = 1
+
+  sns_topic_name = (
+    "fii-data-ai-platform-dev-gold-operational-alerts"
+  )
+
+  alert_email = var.gold_alert_email
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "GoldOperationalObservability"
+    ManagedBy   = "Terraform"
+  }
+
+  depends_on = [
+    module.iam
+  ]
+}
+
+module "lambda_gold_readiness" {
+  source = "../../modules/lambda-gold-readiness"
+
+  function_name = "fii-data-ai-platform-dev-gold-readiness"
+
+  filename = "../../../../lambda/gold-readiness/build/gold_readiness.zip"
+
+  source_code_hash = filebase64sha256(
+    "../../../../lambda/gold-readiness/build/gold_readiness.zip"
+  )
+
+  data_lake_bucket_name = module.s3_data_lake.bucket_name
+  data_lake_bucket_arn  = module.s3_data_lake.bucket_arn
+
+  gold_lambda_function_name = (
+    module.lambda_fii_master_gold.function_name
+  )
+
+  gold_lambda_function_arn = (
+    module.lambda_fii_master_gold.function_arn
+  )
+
+  timeout     = 30
+  memory_size = 128
+
+  log_retention_days = 14
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "GoldReadiness"
+    ManagedBy   = "Terraform"
+  }
+
+  depends_on = [
+    module.lambda_fii_master_gold
+  ]
+}
+
+module "lambda_gold_recovery_supervisor" {
+  source = "../../modules/lambda-gold-recovery-supervisor"
+
+  function_name = "fii-data-ai-platform-dev-gold-recovery-supervisor"
+
+  filename = "../../../../lambda/gold-recovery-supervisor/build/gold_recovery_supervisor.zip"
+
+  source_code_hash = filebase64sha256(
+    "../../../../lambda/gold-recovery-supervisor/build/gold_recovery_supervisor.zip"
+  )
+
+  data_lake_bucket_name = (
+    module.s3_data_lake.bucket_name
+  )
+
+  data_lake_bucket_arn = (
+    module.s3_data_lake.bucket_arn
+  )
+
+  gold_lambda_function_name = (
+    module.lambda_fii_master_gold.function_name
+  )
+
+  gold_lambda_function_arn = (
+    module.lambda_fii_master_gold.function_arn
+  )
+
+  raw_to_silver_function_names = {
+    b3 = (
+      module.lambda_b3_silver.function_name
+    )
+
+    cvm = (
+      module.lambda_cvm_silver.function_name
+    )
+
+    b3_instruments = (
+      module.lambda_b3_instruments_silver.function_name
+    )
+  }
+
+  raw_to_silver_function_arns = {
+    b3 = (
+      module.lambda_b3_silver.function_arn
+    )
+
+    cvm = (
+      module.lambda_cvm_silver.function_arn
+    )
+
+    b3_instruments = (
+      module.lambda_b3_instruments_silver.function_arn
+    )
+  }
+
+  operational_alert_topic_arn = (
+    module.gold_operational_observability.sns_topic_arn
+  )
+
+  lookback_days = 30
+
+  timeout     = 60
+  memory_size = 128
+
+  log_retention_days = 14
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "GoldRecoverySupervisor"
+    ManagedBy   = "Terraform"
+  }
+}
+
+
+module "gold_recovery_watchdog_scheduler" {
+  source = "../../modules/gold-recovery-watchdog-scheduler"
+
+  schedule_name_prefix = (
+    "fii-data-ai-platform-dev-gold-recovery-watchdog"
+  )
+
+  supervisor_lambda_arn = (
+    module.lambda_gold_recovery_supervisor.function_arn
+  )
+
+  schedule_timezone = (
+    "America/Sao_Paulo"
+  )
+
+  lookback_days = 1
+
+  enabled = true
+
+  maximum_event_age_seconds = 3600
+  maximum_retry_attempts    = 0
+
+  tags = {
+    Project     = "fii-data-ai-platform"
+    Environment = "dev"
+    Component   = "GoldRecoveryWatchdog"
     ManagedBy   = "Terraform"
   }
 }

@@ -79,6 +79,16 @@ resource "aws_iam_policy" "lambda_execution" {
         Resource = "${var.data_lake_bucket_arn}/silver/b3-instruments/*"
       },
       {
+        Sid    = "WriteGoldReadinessMarker"
+        Effect = "Allow"
+
+        Action = [
+          "s3:PutObject"
+        ]
+
+        Resource = "${var.data_lake_bucket_arn}/control/gold-readiness/*"
+      },
+      {
         Sid    = "CloudWatchLogs"
         Effect = "Allow"
 

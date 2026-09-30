@@ -17,7 +17,7 @@ resource "aws_iam_policy" "ecr_admin" {
         Resource = "*"
       },
       {
-        Sid    = "EcrSilverRepositoryManagement"
+        Sid    = "EcrPlatformRepositoryManagement"
         Effect = "Allow"
 
         Action = [
@@ -35,11 +35,12 @@ resource "aws_iam_policy" "ecr_admin" {
         ]
 
         Resource = [
-          "arn:aws:ecr:sa-east-1:625685670804:repository/fii-data-ai-platform-dev-*-silver"
+          "arn:aws:ecr:sa-east-1:625685670804:repository/fii-data-ai-platform-dev-*-silver",
+          "arn:aws:ecr:sa-east-1:625685670804:repository/fii-data-ai-platform-dev-fii-master-gold"
         ]
       },
       {
-        Sid    = "EcrSilverImageManagement"
+        Sid    = "EcrPlatformImageManagement"
         Effect = "Allow"
 
         Action = [
@@ -55,7 +56,8 @@ resource "aws_iam_policy" "ecr_admin" {
         ]
 
         Resource = [
-          "arn:aws:ecr:sa-east-1:625685670804:repository/fii-data-ai-platform-dev-*-silver"
+          "arn:aws:ecr:sa-east-1:625685670804:repository/fii-data-ai-platform-dev-*-silver",
+          "arn:aws:ecr:sa-east-1:625685670804:repository/fii-data-ai-platform-dev-fii-master-gold"
         ]
       }
     ]

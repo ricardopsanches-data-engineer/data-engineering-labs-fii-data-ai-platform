@@ -1,0 +1,78 @@
+{
+  "schema_version": "1.0",
+  "market": "B3",
+  "year": 2026,
+  "source": {
+    "name": "B3",
+    "reference": "Calendário de negociação - Calendário do mercado 2026",
+    "published_at": "2026-01-09"
+  },
+  "non_trading_dates": [
+    {
+      "date": "2026-01-01",
+      "reason": "Confraternização Universal"
+    },
+    {
+      "date": "2026-02-16",
+      "reason": "Carnaval"
+    },
+    {
+      "date": "2026-02-17",
+      "reason": "Carnaval"
+    },
+    {
+      "date": "2026-04-03",
+      "reason": "Sexta-feira Santa"
+    },
+    {
+      "date": "2026-04-21",
+      "reason": "Tiradentes"
+    },
+    {
+      "date": "2026-05-01",
+      "reason": "Dia do Trabalho"
+    },
+    {
+      "date": "2026-06-04",
+      "reason": "Corpus Christi"
+    },
+    {
+      "date": "2026-09-07",
+      "reason": "Independência do Brasil"
+    },
+    {
+      "date": "2026-10-12",
+      "reason": "Nossa Senhora Aparecida"
+    },
+    {
+      "date": "2026-11-02",
+      "reason": "Finados"
+    },
+    {
+      "date": "2026-11-20",
+      "reason": "Dia Nacional de Zumbi e da Consciência Negra"
+    },
+    {
+      "date": "2026-12-24",
+      "reason": "Véspera de Natal - sem sessão de negociação"
+    },
+    {
+      "date": "2026-12-25",
+      "reason": "Natal"
+    },
+    {
+      "date": "2026-12-31",
+      "reason": "Véspera de Ano Novo - sem sessão de negociação"
+    }
+  ],
+  "special_trading_dates": [
+    {
+      "date": "2026-02-18",
+      "reason": "Quarta-feira de Cinzas - pregão em horário especial"
+    },
+    {
+      "date": "2026-07-09",
+      "reason": "Revolução Constitucionalista - pregão normal"
+    }
+  ]
+}

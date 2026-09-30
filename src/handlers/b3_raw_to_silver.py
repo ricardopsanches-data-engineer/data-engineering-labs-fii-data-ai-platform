@@ -1,33 +1,71 @@
 import os
 import re
+
+from datetime import date
 from pathlib import Path
 from urllib.parse import unquote_plus
 
 import boto3
 
-from src.pipelines.b3_raw_to_silver import transform_b3_raw_to_silver
+from src.orchestration.gold_readiness import (
+    get_s3_object_run_date,
+    write_success_marker,
+)
+
+from src.pipelines.b3_raw_to_silver import (
+    transform_b3_raw_to_silver,
+)
+
 
 TMP_RAW_ROOT = Path("/tmp/raw/b3")
 TMP_SILVER_ROOT = Path("/tmp/silver/b3")
 
-B3_RAW_FILE_PATTERN = re.compile(r"^b3_download_\d{8}\.zip$")
+B3_RAW_FILE_PATTERN = re.compile(
+    r"^b3_download_\d{8}\.zip$"
+)
+
+B3_RAW_KEY_PATTERN = re.compile(
+    r"^raw/b3/"
+    r"year=(\d{4})/"
+    r"month=(\d{2})/"
+    r"day=(\d{2})/"
+    r"b3_download_\d{8}\.zip$"
+)
 
 
-def extract_s3_objects(event: dict) -> list[tuple[str, str]]:
+def extract_s3_objects(
+    event: dict,
+) -> list[tuple[str, str]]:
     if "Records" in event:
         objects: list[tuple[str, str]] = []
 
         for record in event["Records"]:
-            if record.get("eventSource") != "aws:s3":
+            if record.get(
+                "eventSource"
+            ) != "aws:s3":
                 continue
 
-            s3_data = record.get("s3", {})
-            bucket = s3_data.get("bucket", {}).get("name")
-            key = s3_data.get("object", {}).get("key")
+            s3_data = record.get(
+                "s3",
+                {},
+            )
+
+            bucket = (
+                s3_data
+                .get("bucket", {})
+                .get("name")
+            )
+
+            key = (
+                s3_data
+                .get("object", {})
+                .get("key")
+            )
 
             if not bucket or not key:
                 raise ValueError(
-                    "Invalid S3 event: bucket or key is missing."
+                    "Invalid S3 event: "
+                    "bucket or key is missing."
                 )
 
             objects.append(
@@ -39,7 +77,8 @@ def extract_s3_objects(event: dict) -> list[tuple[str, str]]:
 
         if not objects:
             raise ValueError(
-                "No valid S3 records found in event."
+                "No valid S3 records "
+                "found in event."
             )
 
         return objects
@@ -56,13 +95,18 @@ def extract_s3_objects(event: dict) -> list[tuple[str, str]]:
         ]
 
     raise ValueError(
-        "Unsupported event format. Expected an S3 event or "
+        "Unsupported event format. "
+        "Expected an S3 event or "
         "{'bucket': '...', 'key': '...'}."
     )
 
 
-def validate_raw_key(key: str) -> None:
-    if not key.startswith("raw/b3/"):
+def validate_raw_key(
+    key: str,
+) -> None:
+    if not key.startswith(
+        "raw/b3/"
+    ):
         raise ValueError(
             f"Invalid B3 RAW key: {key}. "
             "Expected prefix 'raw/b3/'."
@@ -70,15 +114,31 @@ def validate_raw_key(key: str) -> None:
 
     filename = Path(key).name
 
-    if not B3_RAW_FILE_PATTERN.fullmatch(filename):
+    if not B3_RAW_FILE_PATTERN.fullmatch(
+        filename
+    ):
         raise ValueError(
             f"Invalid B3 RAW filename: {filename}. "
-            "Expected format 'b3_download_YYYYMMDD.zip'."
+            "Expected format "
+            "'b3_download_YYYYMMDD.zip'."
+        )
+
+    if not B3_RAW_KEY_PATTERN.fullmatch(
+        key
+    ):
+        raise ValueError(
+            f"Invalid B3 RAW key structure: {key}."
         )
 
 
-def build_local_raw_path(key: str) -> Path:
-    return TMP_RAW_ROOT / Path(key).name
+
+def build_local_raw_path(
+    key: str,
+) -> Path:
+    return (
+        TMP_RAW_ROOT
+        / Path(key).name
+    )
 
 
 def download_raw_from_s3(
@@ -106,8 +166,15 @@ def run_b3_raw_to_silver(
 ) -> dict:
     validate_raw_key(key)
 
-    local_raw_path = build_local_raw_path(
-        key
+    run_date = get_s3_object_run_date(
+        bucket=bucket,
+        key=key,
+    )
+
+    local_raw_path = (
+        build_local_raw_path(
+            key
+        )
     )
 
     download_raw_from_s3(
@@ -127,6 +194,31 @@ def run_b3_raw_to_silver(
             upload_to_s3=True,
             force=False,
         )
+    )
+
+    readiness = write_success_marker(
+        bucket=bucket,
+        run_date=run_date,
+        source="b3",
+        reference_date=str(
+            silver_metadata[
+                "trade_date"
+            ]
+        ),
+        silver_key=silver_metadata[
+            "s3_key"
+        ],
+        records=silver_metadata[
+            "records"
+        ],
+        extra={
+            "trade_date": str(
+                silver_metadata[
+                    "trade_date"
+                ]
+            ),
+            "raw_key": key,
+        },
     )
 
     return {
@@ -151,6 +243,11 @@ def run_b3_raw_to_silver(
         "s3_uri": silver_metadata.get(
             "s3_uri"
         ),
+        "readiness_marker": (
+            readiness[
+                "marker_key"
+            ]
+        ),
     }
 
 
@@ -167,7 +264,8 @@ def lambda_handler(
             bucket=bucket,
             key=key,
         )
-        for bucket, key in objects
+        for bucket, key
+        in objects
     ]
 
     if len(results) == 1:
