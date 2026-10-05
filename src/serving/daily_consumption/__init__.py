@@ -1,0 +1,1 @@
+"""Daily Consumption Layer."""
