@@ -1,0 +1,1 @@
+"""Governed structured retrieval for AI consumers."""
